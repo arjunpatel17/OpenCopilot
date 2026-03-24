@@ -206,15 +206,11 @@ async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> Async
 
                 event_type = event.get("type", "")
 
-                # Log all non-ephemeral events for debugging
-                if not event.get("ephemeral") or "error" in event_type:
-                    logger.warning("JSONL event: %s", event_type)
-
                 # Capture errors from the session
                 if event_type == "session.error":
                     error_msg = event.get("data", {}).get("message", "Unknown error")
                     logger.error("Copilot session error: %s", error_msg)
-                    yield f"[Error]: {error_msg}"
+                    yield f"\n[Error]: {error_msg}"
                     process.kill()
                     return
 
@@ -224,6 +220,18 @@ async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> Async
                     if delta:
                         got_any_delta = True
                         yield delta
+
+                # Show tool execution activity
+                elif event_type == "tool.execution_start":
+                    tool_name = event.get("data", {}).get("toolName", "")
+                    if tool_name:
+                        yield f"\n🔧 _{tool_name}_\n"
+
+                # Show new turn starting (after tool results return)
+                elif event_type == "assistant.turn_start":
+                    turn_id = event.get("data", {}).get("turnId", "0")
+                    if turn_id != "0":
+                        yield "\n---\n"
 
                 # Process finished — final summary event
                 elif event_type == "result":
