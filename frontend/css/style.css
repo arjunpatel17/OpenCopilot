@@ -257,7 +257,7 @@ html, body {
     border-bottom: 1px solid var(--border);
 }
 
-#agent-select {
+#agent-select, #model-select {
     background: var(--bg-input);
     color: var(--text-primary);
     border: 1px solid var(--border);

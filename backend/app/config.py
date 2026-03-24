@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: list[str] = ["*"]
 
+    # Copilot model (empty string = use CLI default)
+    copilot_model: str = ""
+
     # Auth toggle (disable for local dev)
     auth_enabled: bool = False
 

@@ -52,6 +52,7 @@ class ChatSessionSummary(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     agent_name: Optional[str] = None
+    model_name: Optional[str] = None
     session_id: Optional[str] = None
 
 

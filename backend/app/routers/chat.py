@@ -7,7 +7,7 @@ from app.models.chat import (
     ChatRequest, ChatMessage, ChatSessionSummary, ChatSession,
     MessageRole, MessageContent, MessageContentType,
 )
-from app.services import copilot, session_manager, response_parser
+from app.services import copilot, session_manager, response_parser, blob_storage
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -43,6 +43,7 @@ async def chat_sync(request: ChatRequest, user: dict = Depends(get_current_user)
     agent_name, prompt = _parse_user_input(request.message)
     if request.agent_name:
         agent_name = request.agent_name
+    model_name = request.model_name
 
     # Get or create session
     if request.session_id:
@@ -60,7 +61,10 @@ async def chat_sync(request: ChatRequest, user: dict = Depends(get_current_user)
     session_manager.add_message(session.id, user_msg)
 
     # Run Copilot
-    raw_output = await copilot.run_copilot_sync(prompt, agent_name)
+    raw_output = await copilot.run_copilot_sync(prompt, agent_name, model_name=model_name)
+
+    # Sync any files created by the copilot to blob storage
+    blob_storage.sync_workspace_to_storage()
 
     # Parse output
     contents = response_parser.parse_copilot_output(raw_output)
@@ -91,6 +95,7 @@ async def chat_stream(websocket: WebSocket):
             request = json.loads(data)
             message = request.get("message", "")
             agent_name_req = request.get("agent_name")
+            model_name = request.get("model_name")
             session_id = request.get("session_id")
 
             agent_name, prompt = _parse_user_input(message)
@@ -124,9 +129,9 @@ async def chat_stream(websocket: WebSocket):
             # Stream Copilot output
             full_output = []
             if agent_name:
-                stream = copilot.run_code_chat(prompt, agent_name)
+                stream = copilot.run_code_chat(prompt, agent_name, model_name=model_name)
             else:
-                stream = copilot.run_gh_copilot(prompt)
+                stream = copilot.run_gh_copilot(prompt, model_name=model_name)
 
             async for chunk in stream:
                 full_output.append(chunk)
@@ -138,6 +143,9 @@ async def chat_stream(websocket: WebSocket):
             # Parse full output and save
             raw = "".join(full_output)
             contents = response_parser.parse_copilot_output(raw)
+
+            # Sync any files created by the copilot to blob storage
+            blob_storage.sync_workspace_to_storage()
 
             assistant_msg = ChatMessage(
                 role=MessageRole.assistant,

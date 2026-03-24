@@ -154,7 +154,8 @@ def _azure_list_blobs(prefix: str = "") -> list[BlobFileInfo]:
         else:
             items.append(BlobFileInfo(
                 name=blob.name.rsplit("/", 1)[-1], path=blob.name, is_folder=False,
-                size=blob.size, last_modified=blob.last_modified, content_type=blob.content_type,
+                size=blob.size, last_modified=blob.last_modified,
+                content_type=blob.content_settings.content_type if blob.content_settings else None,
             ))
     return items
 
@@ -174,7 +175,7 @@ def _azure_get_file_tree(prefix: str = "") -> list[FileTreeNode]:
                     name=part, path=path_so_far, is_folder=not is_last,
                     size=blob.size if is_last else None,
                     last_modified=blob.last_modified if is_last else None,
-                    content_type=blob.content_type if is_last else None,
+                    content_type=(blob.content_settings.content_type if blob.content_settings else None) if is_last else None,
                 )
                 current_level[part] = node
             else:
@@ -204,10 +205,11 @@ def _azure_get_blob_content(path: str) -> bytes:
 def _azure_get_blob_metadata(path: str) -> FileMetadata:
     container = _get_container_client()
     props = container.get_blob_client(path).get_blob_properties()
+    ct = props.content_settings.content_type if props.content_settings else "application/octet-stream"
     return FileMetadata(
         name=path.rsplit("/", 1)[-1], path=path, size=props.size,
         last_modified=props.last_modified,
-        content_type=props.content_type or "application/octet-stream",
+        content_type=ct or "application/octet-stream",
         etag=props.etag,
     )
 
@@ -261,3 +263,31 @@ else:
     upload_blob = _local_upload_blob
     delete_blob = _local_delete_blob
     download_folder_as_zip = _local_download_folder_as_zip
+
+
+def sync_workspace_to_storage() -> int:
+    """Scan the local workspace directory and upload any files to blob storage.
+    Skips hidden directories (like .github) and the sessions/ prefix.
+    Returns the number of files synced."""
+    if not _use_azure:
+        return 0
+    workspace = Path(settings.workspace_dir)
+    if not workspace.exists():
+        return 0
+    count = 0
+    for fp in workspace.rglob("*"):
+        if not fp.is_file():
+            continue
+        rel = fp.relative_to(workspace)
+        # Skip hidden dirs, sessions (managed separately), and __pycache__
+        parts = rel.parts
+        if any(p.startswith(".") or p == "__pycache__" for p in parts):
+            continue
+        if parts[0] == "sessions":
+            continue
+        rel_str = str(rel)
+        ct = mimetypes.guess_type(fp.name)[0] or "application/octet-stream"
+        data = fp.read_bytes()
+        _azure_upload_blob(rel_str, data, ct)
+        count += 1
+    return count

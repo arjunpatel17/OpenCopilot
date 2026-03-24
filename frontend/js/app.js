@@ -28,6 +28,7 @@ const els = {
     voiceBtn: $('#voice-btn'),
     voiceIndicator: $('#voice-indicator'),
     agentSelect: $('#agent-select'),
+    modelSelect: $('#model-select'),
     agentHint: $('#agent-hint'),
     newChatBtn: $('#new-chat-btn'),
     sessionsList: $('#sessions-list'),
@@ -307,6 +308,7 @@ function sendMessage() {
     if (!text || state.isStreaming) return;
 
     const agentName = els.agentSelect.value || null;
+    const modelName = els.modelSelect.value || null;
 
     // Show user message
     addMessage('user', text);
@@ -325,6 +327,7 @@ function sendMessage() {
         state.ws.send(JSON.stringify({
             message: text,
             agent_name: agentName,
+            model_name: modelName,
             session_id: state.currentSessionId,
         }));
     } else {

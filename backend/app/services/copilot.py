@@ -45,7 +45,9 @@ async def _run_cli(args: list[str], error_label: str) -> AsyncIterator[str]:
     try:
         full_output = []
         no_output_cycles = 0
-        max_no_output = 20  # 20 * 15s = 5 minutes max silence
+        max_no_output = 60  # 60 * 15s = 15 minutes max silence
+        # After receiving output, allow less silence before assuming done
+        max_no_output_after_data = 8  # 8 * 15s = 2 minutes post-output silence
 
         while True:
             try:
@@ -55,9 +57,14 @@ async def _run_cli(args: list[str], error_label: str) -> AsyncIterator[str]:
                 if process.returncode is not None:
                     break
                 no_output_cycles += 1
-                if no_output_cycles >= max_no_output:
+                # If we already got output and then silence, finish sooner
+                effective_max = max_no_output_after_data if full_output else max_no_output
+                if no_output_cycles >= effective_max:
                     process.kill()
-                    yield "\n[Error]: Command timed out after 5 minutes with no output."
+                    if full_output:
+                        # Got output then silence — CLI likely finished its reply
+                        break
+                    yield "\n[Error]: Command timed out after 15 minutes with no output."
                     return
                 # Still running — yield a keepalive so callers know it's alive
                 continue
@@ -87,7 +94,7 @@ async def _run_cli(args: list[str], error_label: str) -> AsyncIterator[str]:
         yield "\n[Error]: Command timed out."
 
 
-async def run_code_chat(prompt: str, agent_name: str | None = None) -> AsyncIterator[str]:
+async def run_code_chat(prompt: str, agent_name: str | None = None, *, model_name: str | None = None) -> AsyncIterator[str]:
     """Run an agent. Tries `code chat` first, falls back to gh copilot with agent instructions."""
     code_path = _find_cli("code")
     if code_path:
@@ -102,16 +109,15 @@ async def run_code_chat(prompt: str, agent_name: str | None = None) -> AsyncIter
         return
 
     # Fallback: load agent instructions and send via gh copilot
-    async for chunk in run_with_agent(prompt, agent_name):
+    async for chunk in run_with_agent(prompt, agent_name, model_name=model_name):
         yield chunk
 
 
-async def run_with_agent(prompt: str, agent_name: str | None = None) -> AsyncIterator[str]:
+async def run_with_agent(prompt: str, agent_name: str | None = None, *, model_name: str | None = None) -> AsyncIterator[str]:
     """Run a prompt with agent instructions injected, via gh copilot."""
     if agent_name:
         instructions = _load_agent_instructions(agent_name)
         if instructions:
-            # Combine agent instructions with the user prompt
             combined = f"Follow these instructions:\n\n{instructions}\n\n---\nUser request: {prompt}"
         else:
             yield f"[Warning]: Agent '{agent_name}' not found, running as freeform.\n\n"
@@ -119,28 +125,33 @@ async def run_with_agent(prompt: str, agent_name: str | None = None) -> AsyncIte
     else:
         combined = prompt
 
-    async for chunk in run_gh_copilot(combined):
+    async for chunk in run_gh_copilot(combined, model_name=model_name):
         yield chunk
 
 
-async def run_gh_copilot(prompt: str) -> AsyncIterator[str]:
+async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> AsyncIterator[str]:
     """Run `gh copilot -p` and yield output chunks."""
     gh_path = _find_cli("gh")
     if not gh_path:
         yield "[Error]: 'gh' CLI not found. Install: brew install gh"
         return
 
-    async for chunk in _run_cli([gh_path, "copilot", "-p", prompt], "gh copilot"):
+    model = model_name or settings.copilot_model
+    args = [gh_path, "copilot", "--allow-all"]
+    if model:
+        args.extend(["--model", model])
+    args.extend(["-p", prompt])
+    async for chunk in _run_cli(args, "gh copilot"):
         yield chunk
 
 
-async def run_copilot_sync(prompt: str, agent_name: str | None = None) -> str:
+async def run_copilot_sync(prompt: str, agent_name: str | None = None, *, model_name: str | None = None) -> str:
     """Run a Copilot command and return the full output."""
     chunks = []
     if agent_name:
-        async for chunk in run_with_agent(prompt, agent_name):
+        async for chunk in run_with_agent(prompt, agent_name, model_name=model_name):
             chunks.append(chunk)
     else:
-        async for chunk in run_gh_copilot(prompt):
+        async for chunk in run_gh_copilot(prompt, model_name=model_name):
             chunks.append(chunk)
     return "".join(chunks)
