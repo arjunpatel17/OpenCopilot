@@ -1,0 +1,12 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+websockets==14.1
+pydantic==2.10.3
+pydantic-settings==2.7.0
+azure-identity==1.19.0
+azure-storage-blob==12.24.0
+python-multipart==0.0.20
+pyyaml==6.0.2
+python-jose[cryptography]==3.3.0
+httpx==0.28.1
+python-telegram-bot==21.10
