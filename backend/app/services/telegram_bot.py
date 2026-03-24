@@ -7,6 +7,7 @@ from app.services import copilot
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 AGENT_CMD_PREFIX = "/agent "
 
@@ -29,6 +30,13 @@ async def _send_typing_loop(bot: Bot, chat_id: int, stop_event: asyncio.Event):
 
 async def handle_telegram_message(update_data: dict) -> None:
     """Process an incoming Telegram update from the webhook."""
+    try:
+        await _handle_telegram_message_inner(update_data)
+    except Exception:
+        logger.exception("Unhandled error in telegram handler")
+
+
+async def _handle_telegram_message_inner(update_data: dict) -> None:
     update = Update.de_json(update_data, Bot(settings.telegram_bot_token))
 
     if not update or not update.message:
@@ -70,6 +78,12 @@ async def handle_telegram_message(update_data: dict) -> None:
         agent_name = parts[0]
         prompt = parts[1] if len(parts) > 1 else ""
 
+    elif text.startswith("/") and not text.startswith("/start"):
+        # Parse /agent-name prompt (same as web UI slash commands)
+        parts = text[1:].split(" ", 1)
+        agent_name = parts[0]
+        prompt = parts[1] if len(parts) > 1 else ""
+
     elif text.startswith("/start"):
         await bot.send_message(
             chat_id=chat_id,
@@ -105,24 +119,54 @@ async def handle_telegram_message(update_data: dict) -> None:
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(_send_typing_loop(bot, chat_id, stop_typing))
 
-    # Stream output from Copilot
+    # Stream output from Copilot — send incremental messages
     try:
-        chunks = []
+        buffer = ""
+        last_send_time = asyncio.get_event_loop().time()
+        send_interval = 3  # seconds between incremental sends
+        sent_any = False
+
         if agent_name:
             stream = copilot.run_with_agent(prompt, agent_name)
         else:
             stream = copilot.run_gh_copilot(prompt)
 
-        async for chunk in stream:
-            chunks.append(chunk)
+        logger.warning("Starting copilot stream for chat %s", chat_id)
 
-        result = "".join(chunks)
+        async for chunk in stream:
+            buffer += chunk
+            now = asyncio.get_event_loop().time()
+            # Send buffered text periodically to show progress
+            if now - last_send_time >= send_interval and buffer.strip():
+                for msg_chunk in _split_message(_clean_output(buffer)):
+                    await bot.send_message(chat_id=chat_id, text=msg_chunk)
+                    sent_any = True
+                buffer = ""
+                last_send_time = now
+
+        logger.warning("Copilot stream ended for chat %s, buffer remaining: %d chars", chat_id, len(buffer))
+
+        # Send any remaining text
+        if buffer.strip():
+            cleaned = _clean_output(buffer)
+            if cleaned.strip():
+                for msg_chunk in _split_message(cleaned):
+                    await bot.send_message(chat_id=chat_id, text=msg_chunk)
+                    sent_any = True
+
+        if not sent_any:
+            await bot.send_message(chat_id=chat_id, text="_(No response from Copilot)_")
+
     except Exception as e:
-        logger.exception("Copilot execution failed")
-        result = f"❌ Error: {e}"
+        logger.exception("Copilot execution failed for chat %s", chat_id)
+        await bot.send_message(chat_id=chat_id, text=f"❌ Error: {e}")
     finally:
         stop_typing.set()
         typing_task.cancel()
+
+    # Sync any files created by copilot to blob storage
+    from app.services import blob_storage
+    synced = blob_storage.sync_workspace_to_storage()
 
     # Delete the "processing" message
     try:
@@ -130,15 +174,23 @@ async def handle_telegram_message(update_data: dict) -> None:
     except Exception:
         pass
 
-    if not result.strip():
-        result = "_(No response from Copilot)_"
-
-    # Clean up usage stats from gh copilot output
-    result = _clean_output(result)
-
-    # Send result — split if needed for Telegram's 4096 char limit
-    for chunk in _split_message(result):
-        await bot.send_message(chat_id=chat_id, text=chunk)
+    # Notify about generated files
+    if synced > 0:
+        try:
+            tree = blob_storage.get_file_tree("reports")
+            file_names = [n.name for n in tree if not n.is_folder]
+            if file_names:
+                file_list = "\n".join(f"• {f}" for f in file_names[:10])
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"📁 **{synced} file(s) generated:**\n{file_list}\n\nView them in the web app's File Explorer.",
+                    parse_mode="Markdown",
+                )
+        except Exception:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"📁 {synced} file(s) were generated. View them in the web app's File Explorer.",
+            )
 
 
 async def _transcribe_voice(bot: Bot, file_id: str) -> str | None:

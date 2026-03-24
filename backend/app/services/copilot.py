@@ -1,9 +1,12 @@
 import asyncio
 import json
+import logging
 import shutil
 from pathlib import Path
 from typing import AsyncIterator
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 300  # 5 min max per command
 
@@ -132,13 +135,18 @@ async def run_with_agent(prompt: str, agent_name: str | None = None, *, model_na
 
 async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> AsyncIterator[str]:
     """Run `gh copilot -p` with JSON output and yield text chunks until the turn ends."""
+    # Prefer standalone copilot binary, fall back to gh copilot wrapper
+    copilot_path = _find_cli("copilot")
     gh_path = _find_cli("gh")
-    if not gh_path:
-        yield "[Error]: 'gh' CLI not found. Install: brew install gh"
+    if not copilot_path and not gh_path:
+        yield "[Error]: Neither 'copilot' nor 'gh' CLI found in PATH."
         return
 
     model = model_name or settings.copilot_model
-    args = [gh_path, "copilot", "--", "--allow-all", "--output-format", "json"]
+    if copilot_path:
+        args = [copilot_path, "--allow-all", "--output-format", "json"]
+    else:
+        args = [gh_path, "copilot", "--", "--allow-all", "--output-format", "json"]
     if model:
         args.extend(["--model", model])
     args.extend(["-p", prompt])
@@ -161,7 +169,7 @@ async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> Async
     try:
         buffer = ""
         no_output_cycles = 0
-        max_no_output = 60  # 15 minutes max
+        max_no_output = 60  # 60 * 15s = 15 minutes max silence
         got_any_delta = False
 
         while True:
@@ -173,6 +181,8 @@ async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> Async
                 no_output_cycles += 1
                 if no_output_cycles >= max_no_output:
                     process.kill()
+                    if got_any_delta:
+                        break
                     yield "\n[Error]: Command timed out."
                     return
                 continue
@@ -196,6 +206,18 @@ async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> Async
 
                 event_type = event.get("type", "")
 
+                # Log all non-ephemeral events for debugging
+                if not event.get("ephemeral") or "error" in event_type:
+                    logger.warning("JSONL event: %s", event_type)
+
+                # Capture errors from the session
+                if event_type == "session.error":
+                    error_msg = event.get("data", {}).get("message", "Unknown error")
+                    logger.error("Copilot session error: %s", error_msg)
+                    yield f"[Error]: {error_msg}"
+                    process.kill()
+                    return
+
                 # Stream assistant text deltas to the user
                 if event_type == "assistant.message_delta":
                     delta = event.get("data", {}).get("deltaContent", "")
@@ -203,8 +225,8 @@ async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> Async
                         got_any_delta = True
                         yield delta
 
-                # Turn complete — we have the full response, stop
-                elif event_type == "assistant.turn_end":
+                # Process finished — final summary event
+                elif event_type == "result":
                     process.kill()
                     return
 

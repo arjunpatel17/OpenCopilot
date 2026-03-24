@@ -1,7 +1,11 @@
+import asyncio
+import logging
 from fastapi import APIRouter, Request, Depends, HTTPException
 from app.auth import get_current_user
 from app.config import settings
 from app.services import telegram_bot
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/telegram", tags=["telegram"])
 
@@ -19,7 +23,9 @@ async def telegram_webhook(request: Request):
             raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
     update_data = await request.json()
-    await telegram_bot.handle_telegram_message(update_data)
+    # Run in background so webhook responds immediately (Telegram has a ~60s timeout)
+    task = asyncio.create_task(telegram_bot.handle_telegram_message(update_data))
+    task.add_done_callback(lambda t: logger.exception("Telegram handler failed", exc_info=t.exception()) if t.exception() else None)
     return {"ok": True}
 
 
