@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     telegram_allowed_users: list[str] = []  # Telegram usernames allowed (empty = allow all)
     telegram_webhook_secret: str = ""
 
+    # OpenAI API key (used for Whisper voice transcription)
+    openai_api_key: str = ""
+
+    # Azure Speech Services (for voice transcription)
+    azure_speech_key: str = ""
+    azure_speech_region: str = "eastus"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
     @property

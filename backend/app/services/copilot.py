@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shutil
 from pathlib import Path
 from typing import AsyncIterator
@@ -130,19 +131,101 @@ async def run_with_agent(prompt: str, agent_name: str | None = None, *, model_na
 
 
 async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> AsyncIterator[str]:
-    """Run `gh copilot -p` and yield output chunks."""
+    """Run `gh copilot -p` with JSON output and yield text chunks until the turn ends."""
     gh_path = _find_cli("gh")
     if not gh_path:
         yield "[Error]: 'gh' CLI not found. Install: brew install gh"
         return
 
     model = model_name or settings.copilot_model
-    args = [gh_path, "copilot", "--allow-all"]
+    args = [gh_path, "copilot", "--", "--allow-all", "--output-format", "json"]
     if model:
         args.extend(["--model", model])
     args.extend(["-p", prompt])
-    async for chunk in _run_cli(args, "gh copilot"):
-        yield chunk
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=settings.workspace_dir,
+        )
+    except FileNotFoundError:
+        yield "[Error]: 'gh' CLI not found in PATH."
+        return
+
+    assert process.stdout is not None
+    assert process.stderr is not None
+
+    try:
+        buffer = ""
+        no_output_cycles = 0
+        max_no_output = 60  # 15 minutes max
+        got_any_delta = False
+
+        while True:
+            try:
+                chunk = await asyncio.wait_for(process.stdout.read(4096), timeout=15)
+            except asyncio.TimeoutError:
+                if process.returncode is not None:
+                    break
+                no_output_cycles += 1
+                if no_output_cycles >= max_no_output:
+                    process.kill()
+                    yield "\n[Error]: Command timed out."
+                    return
+                continue
+
+            if not chunk:
+                break
+
+            no_output_cycles = 0
+            buffer += chunk.decode("utf-8", errors="replace")
+
+            # Process complete JSONL lines
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = event.get("type", "")
+
+                # Stream assistant text deltas to the user
+                if event_type == "assistant.message_delta":
+                    delta = event.get("data", {}).get("deltaContent", "")
+                    if delta:
+                        got_any_delta = True
+                        yield delta
+
+                # Turn complete — we have the full response, stop
+                elif event_type == "assistant.turn_end":
+                    process.kill()
+                    return
+
+        # If we got no deltas, check stderr for error info
+        if not got_any_delta:
+            stderr_data = await process.stderr.read()
+            stderr_text = stderr_data.decode("utf-8", errors="replace").strip()
+            if stderr_text:
+                yield f"[Error]: {stderr_text}"
+            else:
+                yield "[Error]: No response received from Copilot CLI."
+
+    except Exception as e:
+        yield f"[Error]: {e}"
+    finally:
+        if process.returncode is None:
+            process.kill()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except Exception:
+            pass
 
 
 async def run_copilot_sync(prompt: str, agent_name: str | None = None, *, model_name: str | None = None) -> str:

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import httpx
 from telegram import Update, Bot
 from telegram.constants import ChatAction
 from app.services import copilot
@@ -30,12 +31,11 @@ async def handle_telegram_message(update_data: dict) -> None:
     """Process an incoming Telegram update from the webhook."""
     update = Update.de_json(update_data, Bot(settings.telegram_bot_token))
 
-    if not update or not update.message or not update.message.text:
+    if not update or not update.message:
         return
 
     message = update.message
     chat_id = message.chat_id
-    text = message.text.strip()
     username = message.from_user.username if message.from_user else None
 
     if not _is_user_allowed(username):
@@ -44,6 +44,22 @@ async def handle_telegram_message(update_data: dict) -> None:
         return
 
     bot = Bot(settings.telegram_bot_token)
+
+    # Handle voice messages
+    if message.voice or message.audio:
+        voice = message.voice or message.audio
+        text = await _transcribe_voice(bot, voice.file_id)
+        if text is None:
+            await bot.send_message(chat_id=chat_id, text="❌ Could not transcribe voice message. Set AZURE_SPEECH_KEY for voice support.")
+            return
+        await bot.send_message(chat_id=chat_id, text=f"🎤 _{text}_", parse_mode="Markdown")
+    elif message.text:
+        text = message.text.strip()
+    else:
+        return
+
+    if not text:
+        return
 
     # Parse agent command: /agent stock-analysis-pro AAPL at $242.50
     agent_name = None
@@ -123,6 +139,41 @@ async def handle_telegram_message(update_data: dict) -> None:
     # Send result — split if needed for Telegram's 4096 char limit
     for chunk in _split_message(result):
         await bot.send_message(chat_id=chat_id, text=chunk)
+
+
+async def _transcribe_voice(bot: Bot, file_id: str) -> str | None:
+    """Download a Telegram voice message and transcribe it via Azure Speech-to-Text."""
+    if not settings.azure_speech_key:
+        logger.warning("AZURE_SPEECH_KEY not set — cannot transcribe voice messages")
+        return None
+
+    try:
+        tg_file = await bot.get_file(file_id)
+        file_bytes = await tg_file.download_as_bytearray()
+
+        url = (
+            f"https://{settings.azure_speech_region}.stt.speech.microsoft.com"
+            f"/speech/recognition/conversation/cognitiveservices/v1"
+            f"?language=en-US"
+        )
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "Ocp-Apim-Subscription-Key": settings.azure_speech_key,
+                    "Content-Type": "audio/ogg; codecs=opus",
+                },
+                content=bytes(file_bytes),
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            if result.get("RecognitionStatus") == "Success":
+                return result.get("DisplayText", "").strip()
+            logger.warning("Speech recognition status: %s", result.get("RecognitionStatus"))
+            return None
+    except Exception:
+        logger.exception("Voice transcription failed")
+        return None
 
 
 def _clean_output(text: str) -> str:
