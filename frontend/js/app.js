@@ -463,7 +463,7 @@ function showEmptyState() {
     els.messages.innerHTML = `
         <div class="empty-state">
             <div class="empty-icon">⚡</div>
-            <h2>CopilotAgent</h2>
+            <h2>OpenCopilot</h2>
             <p>Ask Copilot anything, run your agents with <code>/agent-name</code>, or select an agent from the dropdown above.</p>
         </div>
     `;

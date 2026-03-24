@@ -6,7 +6,7 @@ from app.config import settings
 from app.routers import agents, skills, chat, files, telegram
 
 app = FastAPI(
-    title="CopilotAgent API",
+    title="OpenCopilot API",
     description="Run GitHub Copilot agents and commands via REST/WebSocket API",
     version="1.0.0",
 )

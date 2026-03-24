@@ -2,18 +2,18 @@
 set -euo pipefail
 
 # ============================================================
-# Deploy CopilotAgent to Azure Container Apps
+# Deploy OpenCopilot to Azure Container Apps
 # No local Docker required — builds in the cloud via ACR Tasks
 # ============================================================
 
 # ---------- Configuration ----------
-RESOURCE_GROUP="copilot-agent-rg"
+RESOURCE_GROUP="opencopilot-rg"
 LOCATION="eastus"
-ACR_NAME="copilotagentacr$(openssl rand -hex 3)"  # must be globally unique
-CONTAINER_APP_NAME="copilot-agent"
-CONTAINER_ENV_NAME="copilot-agent-env"
-IMAGE_NAME="copilot-agent"
-STORAGE_ACCOUNT_NAME="copilotagentsa$(openssl rand -hex 3)"
+ACR_NAME="opencopilotacr$(openssl rand -hex 3)"  # must be globally unique
+CONTAINER_APP_NAME="opencopilot"
+CONTAINER_ENV_NAME="opencopilot-env"
+IMAGE_NAME="opencopilot"
+STORAGE_ACCOUNT_NAME="opencopilotsa$(openssl rand -hex 3)"
 STORAGE_CONTAINER="copilot-files"
 
 # GitHub token for gh copilot in the container
@@ -23,7 +23,7 @@ if [[ -z "$GH_TOKEN" ]]; then
     exit 1
 fi
 
-echo "=== CopilotAgent Azure Deployment ==="
+echo "=== OpenCopilot Azure Deployment ==="
 echo "Resource Group: $RESOURCE_GROUP"
 echo "Location:       $LOCATION"
 echo ""

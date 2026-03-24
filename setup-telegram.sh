@@ -2,19 +2,27 @@
 set -euo pipefail
 
 # ============================================================
-# Telegram Bot Setup Script for CopilotAgent
+# Telegram Bot Setup Script for OpenCopilot
 # Creates a bot via BotFather API, configures webhook, and
 # updates Azure Container App secrets.
 # ============================================================
 
-APP_URL="https://copilot-agent.whiteocean-646ab086.eastus.azurecontainerapps.io"
-RESOURCE_GROUP="copilot-agent-rg"
-CONTAINER_APP="copilot-agent"
+# ---------- Configuration ----------
+# Update APP_URL after running deploy.sh (it prints the URL)
+APP_URL=""
+RESOURCE_GROUP="opencopilot-rg"
+CONTAINER_APP="opencopilot"
 ENV_FILE="$(dirname "$0")/backend/.env"
-WEBHOOK_SECRET="copilot-agent-$(openssl rand -hex 8)"
+WEBHOOK_SECRET="opencopilot-$(openssl rand -hex 8)"
+
+if [[ -z "$APP_URL" ]]; then
+    echo "ERROR: Set APP_URL at the top of this script to your Azure Container App URL."
+    echo "       Run deploy.sh first, then paste the URL here."
+    exit 1
+fi
 
 echo "============================================"
-echo "  Telegram Bot Setup for CopilotAgent"
+echo "  Telegram Bot Setup for OpenCopilot"
 echo "============================================"
 echo ""
 
@@ -30,8 +38,8 @@ else
     echo ""
     echo "  1. Open Telegram and search for @BotFather"
     echo "  2. Send /newbot"
-    echo "  3. Choose a display name (e.g., 'CopilotAgent')"
-    echo "  4. Choose a username (must end in 'bot', e.g., 'my_copilot_agent_bot')"
+    echo "  3. Choose a display name (e.g., 'OpenCopilot')"
+    echo "  4. Choose a username (must end in 'bot', e.g., 'my_opencopilot_bot')"
     echo "  5. BotFather will give you a token like: 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
     echo ""
     read -rp "  Paste your bot token here: " BOT_TOKEN

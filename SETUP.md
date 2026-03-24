@@ -1,4 +1,4 @@
-# CopilotAgent Setup Guide
+# OpenCopilot Setup Guide
 
 Run GitHub Copilot agents and commands from a website, Telegram bot, or API — deployed on Azure.
 
@@ -19,8 +19,8 @@ Run GitHub Copilot agents and commands from a website, Telegram bot, or API — 
 ## Step 1: Clone & Install
 
 ```bash
-git clone <your-repo-url> CopilotAgent
-cd CopilotAgent
+git clone <your-repo-url> OpenCopilot
+cd OpenCopilot
 
 # Create Python virtual environment
 cd backend
@@ -78,7 +78,7 @@ To run locally before deploying to Azure:
 cp backend/.env.example backend/.env
 
 # Edit .env — set WORKSPACE_DIR to your full workspace path:
-#   WORKSPACE_DIR=/full/path/to/CopilotAgent/workspace
+#   WORKSPACE_DIR=/full/path/to/OpenCopilot/workspace
 
 # Start the server
 cd backend
@@ -101,14 +101,14 @@ Run the deployment script from the project root:
 ```
 
 This creates all Azure resources (no local Docker needed):
-1. **Resource Group** — `copilot-agent-rg`
+1. **Resource Group** — `opencopilot-rg`
 2. **Azure Container Registry** — builds your Docker image in the cloud
 3. **Azure Storage Account** — for files, reports, and chat sessions
 4. **Azure Container Apps** — runs your app with a public URL
 
 At the end it prints your public URL, e.g.:
 ```
-https://copilot-agent.whiteocean-646ab086.eastus.azurecontainerapps.io
+https://opencopilot.<random>.eastus.azurecontainerapps.io
 ```
 
 ---
@@ -121,7 +121,7 @@ https://copilot-agent.whiteocean-646ab086.eastus.azurecontainerapps.io
 2. Search for **@BotFather** and open the chat
 3. Send `/newbot`
 4. Enter a **display name** (e.g., `My Copilot Agent`)
-5. Enter a **username** (must end in `bot`, e.g., `my_copilot_agent_bot`)
+5. Enter a **username** (must end in `bot`, e.g., `my_opencopilot_bot`)
 6. BotFather replies with your **bot token** — copy it
 
 ### Run the setup script
@@ -164,16 +164,16 @@ hi
 ## Updating After Code Changes
 
 ```bash
-cd CopilotAgent
+cd OpenCopilot
 
 # Rebuild image in Azure (replace ACR name with yours)
-az acr build --registry YOUR_ACR_NAME --image copilot-agent:latest --file Dockerfile .
+az acr build --registry YOUR_ACR_NAME --image opencopilot:latest --file Dockerfile .
 
 # Update the container app
 az containerapp update \
-  --resource-group copilot-agent-rg \
-  --name copilot-agent \
-  --image YOUR_ACR_NAME.azurecr.io/copilot-agent:latest
+  --resource-group opencopilot-rg \
+  --name opencopilot \
+  --image YOUR_ACR_NAME.azurecr.io/opencopilot:latest
 ```
 
 The deploy script prints these exact commands with your ACR name.
@@ -185,7 +185,7 @@ The deploy script prints these exact commands with your ACR name.
 To delete all Azure resources:
 
 ```bash
-az group delete --name copilot-agent-rg --yes --no-wait
+az group delete --name opencopilot-rg --yes --no-wait
 ```
 
 ---
@@ -193,7 +193,7 @@ az group delete --name copilot-agent-rg --yes --no-wait
 ## Project Structure
 
 ```
-CopilotAgent/
+OpenCopilot/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py              # FastAPI app

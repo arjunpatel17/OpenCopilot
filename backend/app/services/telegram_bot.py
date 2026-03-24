@@ -50,7 +50,7 @@ async def handle_telegram_message(update_data: dict) -> None:
         await bot.send_message(
             chat_id=chat_id,
             text=(
-                "⚡ CopilotAgent Bot\n\n"
+                "⚡ OpenCopilot Bot\n\n"
                 "Send me any message to chat with GitHub Copilot.\n\n"
                 "To run a specific agent:\n"
                 "/agent agent-name your prompt here\n\n"
