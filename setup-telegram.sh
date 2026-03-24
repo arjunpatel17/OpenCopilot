@@ -9,7 +9,7 @@ set -euo pipefail
 
 # ---------- Configuration ----------
 # Update APP_URL after running deploy.sh (it prints the URL)
-APP_URL=""
+APP_URL="https://opencopilot.greenmushroom-ffce0184.eastus.azurecontainerapps.io"
 RESOURCE_GROUP="opencopilot-rg"
 CONTAINER_APP="opencopilot"
 ENV_FILE="$(dirname "$0")/backend/.env"
