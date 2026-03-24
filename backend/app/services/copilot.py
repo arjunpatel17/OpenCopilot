@@ -44,16 +44,26 @@ async def _run_cli(args: list[str], error_label: str) -> AsyncIterator[str]:
 
     try:
         full_output = []
+        no_output_cycles = 0
+        max_no_output = 20  # 20 * 15s = 5 minutes max silence
+
         while True:
             try:
-                chunk = await asyncio.wait_for(process.stdout.read(512), timeout=30)
+                chunk = await asyncio.wait_for(process.stdout.read(512), timeout=15)
             except asyncio.TimeoutError:
-                # Process may be stuck waiting for input
-                process.kill()
-                yield "\n[Error]: Command timed out (possibly waiting for interactive input). Ensure CLI tools are fully configured."
-                return
+                # Check if process is still running
+                if process.returncode is not None:
+                    break
+                no_output_cycles += 1
+                if no_output_cycles >= max_no_output:
+                    process.kill()
+                    yield "\n[Error]: Command timed out after 5 minutes with no output."
+                    return
+                # Still running — yield a keepalive so callers know it's alive
+                continue
             if not chunk:
                 break
+            no_output_cycles = 0  # Reset on actual output
             text = chunk.decode("utf-8", errors="replace")
             full_output.append(text)
             yield text

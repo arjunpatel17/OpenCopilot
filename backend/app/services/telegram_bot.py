@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from telegram import Update, Bot
 from telegram.constants import ChatAction
@@ -13,6 +14,16 @@ def _is_user_allowed(username: str | None) -> bool:
     if not settings.telegram_allowed_users:
         return True
     return username in settings.telegram_allowed_users
+
+
+async def _send_typing_loop(bot: Bot, chat_id: int, stop_event: asyncio.Event):
+    """Send typing indicator every 5 seconds until stopped."""
+    while not stop_event.is_set():
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception:
+            pass
+        await asyncio.sleep(5)
 
 
 async def handle_telegram_message(update_data: dict) -> None:
@@ -33,9 +44,6 @@ async def handle_telegram_message(update_data: dict) -> None:
         return
 
     bot = Bot(settings.telegram_bot_token)
-
-    # Send typing indicator
-    await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     # Parse agent command: /agent stock-analysis-pro AAPL at $242.50
     agent_name = None
@@ -65,19 +73,71 @@ async def handle_telegram_message(update_data: dict) -> None:
         await bot.send_message(chat_id=chat_id, text="Please provide a message or prompt.")
         return
 
-    # Run Copilot
+    # Send initial status message
+    if agent_name:
+        status_msg = await bot.send_message(
+            chat_id=chat_id,
+            text=f"⏳ Running agent `{agent_name}`... This may take a few minutes.",
+        )
+    else:
+        status_msg = await bot.send_message(
+            chat_id=chat_id,
+            text="⏳ Processing...",
+        )
+
+    # Keep typing indicator alive while processing
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(_send_typing_loop(bot, chat_id, stop_typing))
+
+    # Stream output from Copilot
     try:
-        result = await copilot.run_copilot_sync(prompt, agent_name)
+        chunks = []
+        if agent_name:
+            stream = copilot.run_with_agent(prompt, agent_name)
+        else:
+            stream = copilot.run_gh_copilot(prompt)
+
+        async for chunk in stream:
+            chunks.append(chunk)
+
+        result = "".join(chunks)
     except Exception as e:
         logger.exception("Copilot execution failed")
         result = f"❌ Error: {e}"
+    finally:
+        stop_typing.set()
+        typing_task.cancel()
+
+    # Delete the "processing" message
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+    except Exception:
+        pass
 
     if not result.strip():
         result = "_(No response from Copilot)_"
 
-    # Telegram has a 4096 char limit per message — split if needed
+    # Clean up usage stats from gh copilot output
+    result = _clean_output(result)
+
+    # Send result — split if needed for Telegram's 4096 char limit
     for chunk in _split_message(result):
         await bot.send_message(chat_id=chat_id, text=chunk)
+
+
+def _clean_output(text: str) -> str:
+    """Remove gh copilot usage stats and noise from the output."""
+    lines = text.split("\n")
+    cleaned = []
+    skip_section = False
+    for line in lines:
+        # Skip usage stats block at the end
+        if line.strip().startswith("Total usage est:") or line.strip().startswith("API time spent:"):
+            skip_section = True
+        if skip_section:
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
 
 
 def _split_message(text: str, max_len: int = 4096) -> list[str]:
