@@ -14,7 +14,7 @@ _use_azure = bool(settings.azure_storage_connection_string)
 # ========== Local filesystem backend ==========
 
 def _local_root() -> Path:
-    p = Path(settings.workspace_dir) / ".storage"
+    p = Path(settings.workspace_dir)
     p.mkdir(parents=True, exist_ok=True)
     return p
 
