@@ -40,12 +40,13 @@ az acr build \
 
 echo "    Image built: $ACR_NAME.azurecr.io/${IMAGE_NAME}:latest"
 
-# Step 2: Update the container app to use the new image
+# Step 2: Update the container app to use the new image (force new revision)
 echo ">>> Step 2/2: Updating container app..."
 az containerapp update \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_APP_NAME" \
     --image "$ACR_NAME.azurecr.io/${IMAGE_NAME}:latest" \
+    --revision-suffix "deploy-$(date +%s)" \
     --output none
 
 # Get the app URL

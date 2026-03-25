@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["*"]
 
     # Copilot model (empty string = use CLI default)
-    copilot_model: str = ""
+    copilot_model: str = "claude-opus-4.6-1m"
 
     # Auth toggle (disable for local dev)
     auth_enabled: bool = False

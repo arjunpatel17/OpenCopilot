@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import httpx
 from pathlib import Path
 from telegram import Update, Bot
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 AGENT_CMD_PREFIX = "/agent "
+MODEL_FLAG_RE = re.compile(r'--model\s+(\S+)')
 
 
 def _is_user_allowed(username: str | None) -> bool:
@@ -55,7 +57,11 @@ HELP_TEXT = (
     "• /agent stock\\-analysis\\-pro AAPL at \\$242\\.50\n"
     "• /plan Analyze the codebase and propose refactoring\n"
     "• /mcps\n"
-    "• /explain What does asyncio\\.gather do?"
+    "• /explain What does asyncio\\.gather do?\n\n"
+    "*Model selection:*\n"
+    "Add `\\-\\-model <id>` to any message:\n"
+    "• \\-\\-model claude\\-opus\\-4\\.6\\-1m explain quantum computing\n"
+    "• /agent stock\\-analysis \\-\\-model gpt\\-5\\.4 AAPL"
 )
 
 
@@ -222,6 +228,14 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
             await bot.send_message(chat_id=chat_id, text="❌ Could not transcribe voice message. Set AZURE_SPEECH_KEY for voice support.")
             return
         await bot.send_message(chat_id=chat_id, text=f"🎤 _{text}_", parse_mode="Markdown")
+    elif message.photo or (message.document and message.document.mime_type and message.document.mime_type.startswith("image/")):
+        # Handle image messages — download and reference in prompt
+        image_path = await _save_telegram_image(bot, message)
+        if image_path is None:
+            await bot.send_message(chat_id=chat_id, text="❌ Could not download the image.")
+            return
+        caption = message.caption.strip() if message.caption else "Analyze this image"
+        text = f"Look at the image file at {image_path} using the view tool. {caption}"
     elif message.text:
         text = message.text.strip()
     else:
@@ -229,6 +243,13 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
 
     if not text:
         return
+
+    # ---- Extract --model flag if present ----
+    model_name = None
+    model_match = MODEL_FLAG_RE.search(text)
+    if model_match:
+        model_name = model_match.group(1)
+        text = MODEL_FLAG_RE.sub('', text).strip()
 
     # ---- Dispatch commands ----
 
@@ -308,18 +329,22 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
 
     # Send initial status message
     mode_label = "plan" if mode == "plan" else "agent"
+    model_info = f" ({model_name})" if model_name else ""
     if agent_name:
         status_msg = await bot.send_message(
             chat_id=chat_id,
-            text=f"⏳ Running `{agent_name}` in {mode_label} mode... This may take a few minutes.",
+            text=f"⏳ Running `{agent_name}` in {mode_label} mode{model_info}... This may take a few minutes.",
         )
     else:
-        status_label = "📋 Planning..." if mode == "plan" else "⏳ Processing..."
+        status_label = f"📋 Planning{model_info}..." if mode == "plan" else f"⏳ Processing{model_info}..."
         status_msg = await bot.send_message(chat_id=chat_id, text=status_label)
 
     # Keep typing indicator alive while processing
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(_send_typing_loop(bot, chat_id, stop_typing))
+
+    # Ensure workspace directories exist
+    copilot.ensure_workspace_dirs()
 
     # Stream output from Copilot — send incremental messages
     try:
@@ -330,11 +355,11 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
         tool_history = []  # track tools used for status updates
 
         if mode == "plan":
-            stream = copilot.run_plan_mode(prompt, agent_name)
+            stream = copilot.run_plan_mode(prompt, agent_name, model_name=model_name)
         elif agent_name:
-            stream = copilot.run_with_agent(prompt, agent_name)
+            stream = copilot.run_with_agent(prompt, agent_name, model_name=model_name)
         else:
-            stream = copilot.run_gh_copilot(prompt)
+            stream = copilot.run_gh_copilot(prompt, model_name=model_name)
 
         logger.warning("Starting copilot stream (%s mode) for chat %s", mode, chat_id)
 
@@ -407,20 +432,45 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
     # Notify about generated files
     if synced > 0:
         try:
-            tree = blob_storage.get_file_tree("reports")
-            file_names = [n.name for n in tree if not n.is_folder]
-            if file_names:
-                file_list = "\n".join(f"• {f}" for f in file_names[:10])
+            # Collect files from all output directories
+            generated = []
+            for prefix in ("projects", "reports", ""):
+                try:
+                    tree = blob_storage.get_file_tree(prefix)
+                    _collect_files(tree, prefix, generated)
+                except Exception:
+                    pass
+            if generated:
+                # Group by top-level folder
+                display = generated[:15]
+                file_list = "\n".join(f"• {f}" for f in display)
+                extra = f"\n  _...and {len(generated) - 15} more_" if len(generated) > 15 else ""
                 await bot.send_message(
                     chat_id=chat_id,
-                    text=f"📁 **{synced} file(s) generated:**\n{file_list}\n\nView them in the web app's File Explorer.",
+                    text=f"📁 **{synced} file(s) generated:**\n{file_list}{extra}\n\nView or download in the web app's File Explorer.",
                     parse_mode="Markdown",
+                )
+            else:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"📁 {synced} file(s) were generated. View them in the web app's File Explorer.",
                 )
         except Exception:
             await bot.send_message(
                 chat_id=chat_id,
                 text=f"📁 {synced} file(s) were generated. View them in the web app's File Explorer.",
             )
+
+
+def _collect_files(nodes, prefix: str, result: list, depth: int = 0):
+    """Recursively collect file paths from a tree for display."""
+    for node in nodes:
+        path = f"{prefix}/{node.name}" if prefix else node.name
+        if node.is_folder:
+            if node.children:
+                _collect_files(node.children, path, result, depth + 1)
+        else:
+            result.append(path)
 
 
 async def _transcribe_voice(bot: Bot, file_id: str) -> str | None:
@@ -455,6 +505,40 @@ async def _transcribe_voice(bot: Bot, file_id: str) -> str | None:
             return None
     except Exception:
         logger.exception("Voice transcription failed")
+        return None
+
+
+async def _save_telegram_image(bot: Bot, message) -> str | None:
+    """Download an image from a Telegram message and save it to the workspace uploads directory.
+    Returns the absolute file path, or None on failure."""
+    try:
+        if message.photo:
+            # Photos come as an array of sizes — take the largest
+            photo = message.photo[-1]
+            file_id = photo.file_id
+            ext = "jpg"
+        elif message.document:
+            file_id = message.document.file_id
+            name = message.document.file_name or "image"
+            ext = name.rsplit(".", 1)[-1] if "." in name else "png"
+        else:
+            return None
+
+        tg_file = await bot.get_file(file_id)
+        file_bytes = await tg_file.download_as_bytearray()
+
+        # Save to workspace/uploads/
+        import uuid
+        uploads_dir = Path(settings.workspace_dir) / "uploads"
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{uuid.uuid4().hex[:12]}.{ext}"
+        filepath = uploads_dir / filename
+        filepath.write_bytes(bytes(file_bytes))
+
+        logger.info("Saved Telegram image to %s (%d bytes)", filepath, len(file_bytes))
+        return str(filepath)
+    except Exception:
+        logger.exception("Failed to save Telegram image")
         return None
 
 

@@ -23,6 +23,13 @@ def _find_cli(name: str) -> str | None:
     return shutil.which(name)
 
 
+def ensure_workspace_dirs():
+    """Ensure standard workspace directories exist."""
+    workspace = Path(settings.workspace_dir)
+    (workspace / "projects").mkdir(parents=True, exist_ok=True)
+    (workspace / "reports").mkdir(parents=True, exist_ok=True)
+
+
 def _load_agent_instructions(agent_name: str) -> str | None:
     """Load the body of an .agent.md file to use as system context."""
     from app.services.agent_parser import load_agent

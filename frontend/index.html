@@ -15,6 +15,7 @@
     <div id="app">
         <!-- Sidebar -->
         <aside id="sidebar" class="sidebar">
+            <div class="sidebar-resize-handle" id="sidebar-resize"></div>
             <div class="sidebar-header">
                 <h1 class="logo">⚡ OpenCopilot</h1>
                 <button id="sidebar-toggle" class="icon-btn" title="Toggle sidebar">☰</button>
@@ -85,9 +86,18 @@
 
                 <!-- Input area -->
                 <div id="input-area">
+                    <div id="image-preview-bar" class="image-preview-bar hidden">
+                        <img id="attached-image-thumb" class="attached-thumb" />
+                        <span id="attached-image-name" class="attached-name"></span>
+                        <button id="remove-image-btn" class="icon-btn" title="Remove image">✕</button>
+                    </div>
                     <div class="input-wrapper">
                         <textarea id="chat-input" placeholder="Ask Copilot anything, or use /agent-name to run an agent..." rows="1"></textarea>
                         <div class="input-actions">
+                            <label id="attach-btn" class="icon-btn" title="Attach image">
+                                📎
+                                <input type="file" id="image-input" accept="image/*" style="display:none" />
+                            </label>
                             <button id="voice-btn" class="icon-btn" title="Voice input">🎤</button>
                             <button id="send-btn" class="icon-btn send-btn" title="Send message">➤</button>
                         </div>

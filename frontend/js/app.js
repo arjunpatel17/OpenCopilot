@@ -13,6 +13,7 @@ const state = {
     recognition: null,
     editorMode: null, // 'create-agent', 'edit-agent', 'create-skill', 'edit-skill'
     editorTarget: null,
+    attachedImage: null, // { file, path } — image attached to next message
 };
 
 // ========== DOM Elements ==========
@@ -367,6 +368,25 @@ function sendMessage() {
     const text = els.chatInput.value.trim();
     if (!text || state.isStreaming) return;
 
+    // Handle local slash commands
+    const cmd = text.toLowerCase();
+    if (cmd === '/models') {
+        els.chatInput.value = '';
+        addMessage('user', text);
+        const groups = els.modelSelect.querySelectorAll('optgroup');
+        let reply = '🧠 **Available Models:**\n\n';
+        groups.forEach((g) => {
+            reply += `**${g.label}:**\n`;
+            Array.from(g.options).forEach((o) => {
+                reply += `- \`${o.value}\` — ${o.textContent}\n`;
+            });
+            reply += '\n';
+        });
+        reply += 'Select a model from the dropdown above.';
+        addMessage('assistant', reply);
+        return;
+    }
+
     const agentName = els.agentSelect.value || null;
     const modelName = els.modelSelect.value || null;
 
@@ -384,18 +404,56 @@ function sendMessage() {
 
     // Send via WebSocket
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-        state.ws.send(JSON.stringify({
+        const payload = {
             message: text,
             agent_name: agentName,
             model_name: modelName,
             session_id: state.currentSessionId,
-        }));
+        };
+        if (state.attachedImage && state.attachedImage.path) {
+            payload.image_path = state.attachedImage.path;
+        }
+        state.ws.send(JSON.stringify(payload));
+        clearAttachedImage();
     } else {
         finalizeStreamingMessage([{ type: 'error', content: 'Not connected. Reconnecting...' }]);
         state.isStreaming = false;
         setInputEnabled(true);
         connectWebSocket();
     }
+}
+
+async function attachImage(file) {
+    // Upload to workspace/uploads/ via the file upload API
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+        const resp = await fetch(`${API_BASE}/api/files/upload?path=uploads/`, {
+            method: 'POST',
+            body: formData,
+        });
+        if (!resp.ok) throw new Error('Upload failed');
+        const result = await resp.json();
+        state.attachedImage = { file, path: result.path };
+
+        // Show preview bar
+        const bar = $('#image-preview-bar');
+        const thumb = $('#attached-image-thumb');
+        const nameEl = $('#attached-image-name');
+        thumb.src = URL.createObjectURL(file);
+        nameEl.textContent = file.name;
+        bar.classList.remove('hidden');
+    } catch (e) {
+        alert('Failed to upload image: ' + e.message);
+    }
+}
+
+function clearAttachedImage() {
+    state.attachedImage = null;
+    const bar = $('#image-preview-bar');
+    if (bar) bar.classList.add('hidden');
+    const input = $('#image-input');
+    if (input) input.value = '';
 }
 
 function setInputEnabled(enabled) {
@@ -775,10 +833,31 @@ function renderFileTree(nodes, container, depth) {
         item.style.setProperty('--depth', depth);
 
         const icon = node.is_folder ? '📁' : getFileIcon(node.name);
+        const downloadBtn = node.is_folder ? '<button class="tree-action-btn" title="Download ZIP">⤓</button>' : '';
         item.innerHTML = `
             <span class="tree-icon">${node.is_folder ? '▶' : ''} ${icon}</span>
             <span class="tree-name">${escapeHtml(node.name)}</span>
+            <span class="tree-actions">
+                ${downloadBtn}
+                <button class="tree-delete-btn" title="Delete">✕</button>
+            </span>
         `;
+
+        // Wire up delete button
+        const deleteBtn = item.querySelector('.tree-delete-btn');
+        deleteBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteFile(node.path, node.name, node.is_folder);
+        });
+
+        // Wire up download button for folders
+        const dlBtn = item.querySelector('.tree-action-btn');
+        if (dlBtn) {
+            dlBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                window.open(`${API_BASE}/api/files/download/${node.path}`, '_blank');
+            });
+        }
 
         if (node.is_folder) {
             const children = document.createElement('div');
@@ -801,6 +880,17 @@ function renderFileTree(nodes, container, depth) {
             container.appendChild(item);
         }
     });
+}
+
+async function deleteFile(path, name, isFolder) {
+    const type = isFolder ? 'folder' : 'file';
+    if (!confirm(`Delete ${type} "${name}"?`)) return;
+    try {
+        await api(`/api/files/${path}`, { method: 'DELETE' });
+        loadFileTree();
+    } catch (e) {
+        alert('Failed to delete: ' + e.message);
+    }
 }
 
 function getFileIcon(name) {
@@ -883,6 +973,34 @@ function initEventListeners() {
         els.chatInput.style.height = Math.min(els.chatInput.scrollHeight, 150) + 'px';
     });
 
+    // Image attachment
+    const imageInput = $('#image-input');
+    if (imageInput) {
+        imageInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) {
+                attachImage(e.target.files[0]);
+            }
+        });
+    }
+    const removeImageBtn = $('#remove-image-btn');
+    if (removeImageBtn) {
+        removeImageBtn.addEventListener('click', clearAttachedImage);
+    }
+
+    // Paste image from clipboard
+    els.chatInput.addEventListener('paste', (e) => {
+        const items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (const item of items) {
+            if (item.type.startsWith('image/')) {
+                e.preventDefault();
+                const file = item.getAsFile();
+                if (file) attachImage(file);
+                return;
+            }
+        }
+    });
+
     // Voice
     els.voiceBtn.addEventListener('click', toggleVoice);
 
@@ -914,6 +1032,42 @@ function initEventListeners() {
     });
     els.filePreviewModal.addEventListener('click', (e) => {
         if (e.target === els.filePreviewModal) els.filePreviewModal.classList.add('hidden');
+    });
+
+    // Sidebar resize
+    initSidebarResize();
+}
+
+function initSidebarResize() {
+    const handle = $('#sidebar-resize');
+    if (!handle) return;
+
+    let startX, startWidth;
+
+    handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        startX = e.clientX;
+        startWidth = els.sidebar.offsetWidth;
+        handle.classList.add('dragging');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        const onMouseMove = (e) => {
+            const delta = e.clientX - startX;
+            const newWidth = Math.max(180, Math.min(600, startWidth + delta));
+            els.sidebar.style.width = newWidth + 'px';
+        };
+
+        const onMouseUp = () => {
+            handle.classList.remove('dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
     });
 }
 

@@ -14,11 +14,14 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 AGENT_SLASH_RE = re.compile(r"^/(\S+)\s*(.*)", re.DOTALL)
 
+# Commands that should not be treated as agent names
+RESERVED_COMMANDS = {"models", "help", "version", "agents", "skills", "mcps", "files", "plan", "explain", "suggest", "sync"}
+
 
 def _parse_user_input(message: str) -> tuple[str | None, str]:
     """Parse slash commands like /stock-analysis-pro AAPL at $242.50."""
     match = AGENT_SLASH_RE.match(message)
-    if match:
+    if match and match.group(1).lower() not in RESERVED_COMMANDS:
         return match.group(1), match.group(2).strip()
     return None, message
 
@@ -98,10 +101,18 @@ async def chat_stream(websocket: WebSocket):
             agent_name_req = request.get("agent_name")
             model_name = request.get("model_name")
             session_id = request.get("session_id")
+            image_path = request.get("image_path")  # path to an uploaded image
 
             agent_name, prompt = _parse_user_input(message)
             if agent_name_req:
                 agent_name = agent_name_req
+
+            # If an image was attached, prepend view instruction to the prompt
+            if image_path:
+                from pathlib import Path
+                from app.config import settings
+                abs_path = Path(settings.workspace_dir) / image_path
+                prompt = f"Look at the image file at {abs_path} using the view tool. {prompt}"
 
             # Get or create session
             if session_id:
