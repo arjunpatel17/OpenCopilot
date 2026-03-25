@@ -267,7 +267,7 @@ else:
 
 def sync_workspace_to_storage() -> int:
     """Scan the local workspace directory and upload any files to blob storage.
-    Skips hidden directories (like .github) and the sessions/ prefix.
+    Skips hidden directories (except .github) and the sessions/ prefix.
     Returns the number of files synced."""
     if not _use_azure:
         return 0
@@ -279,9 +279,9 @@ def sync_workspace_to_storage() -> int:
         if not fp.is_file():
             continue
         rel = fp.relative_to(workspace)
-        # Skip hidden dirs, sessions (managed separately), and __pycache__
         parts = rel.parts
-        if any(p.startswith(".") or p == "__pycache__" for p in parts):
+        # Skip hidden dirs (except .github), sessions, and __pycache__
+        if any((p.startswith(".") and p != ".github") or p == "__pycache__" for p in parts):
             continue
         if parts[0] == "sessions":
             continue
