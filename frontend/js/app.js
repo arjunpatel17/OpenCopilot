@@ -65,6 +65,7 @@ async function api(path, options = {}) {
     const resp = await fetch(url, {
         headers: { 'Content-Type': 'application/json', ...options.headers },
         ...options,
+        cache: 'no-store',
     });
     if (!resp.ok) {
         const text = await resp.text();
@@ -206,6 +207,12 @@ function addStreamingMessage(agentName = null) {
         : `<span>Copilot</span>`;
     msg.appendChild(header);
 
+    // Tool activity tracker
+    const activity = document.createElement('div');
+    activity.id = 'tool-activity';
+    activity.classList.add('tool-activity');
+    msg.appendChild(activity);
+
     const content = document.createElement('div');
     content.id = 'streaming-content';
     msg.appendChild(content);
@@ -217,6 +224,35 @@ function addStreamingMessage(agentName = null) {
     els.messages.appendChild(msg);
     els.messages.scrollTop = els.messages.scrollHeight;
     return msg;
+}
+
+function appendToolActivity(toolName, description) {
+    const activity = $('#tool-activity');
+    if (!activity) return;
+
+    // Mark previous current step as done
+    const prev = activity.querySelector('.tool-step.current');
+    if (prev) {
+        prev.classList.remove('current');
+        prev.classList.add('done');
+        prev.querySelector('.tool-step-icon').textContent = '✓';
+    }
+
+    // Add new current step
+    const step = document.createElement('div');
+    step.classList.add('tool-step', 'current');
+    step.innerHTML = `<span class="tool-step-icon">⏳</span> <span class="tool-step-text">${escapeHtml(description)}</span>`;
+    activity.appendChild(step);
+
+    // Keep only the last 6 steps visible, collapse older ones
+    const steps = activity.querySelectorAll('.tool-step');
+    if (steps.length > 6) {
+        steps[0].classList.add('collapsed');
+    }
+
+    // Show the activity section
+    activity.classList.add('active');
+    els.messages.scrollTop = els.messages.scrollHeight;
 }
 
 function appendStreamChunk(text) {
@@ -234,6 +270,27 @@ function finalizeStreamingMessage(contents) {
     // Remove cursor
     const cursor = msg.querySelector('.streaming-cursor');
     if (cursor) cursor.remove();
+
+    // Finalize tool activity — mark last step as done and collapse
+    const activity = $('#tool-activity');
+    if (activity) {
+        const lastStep = activity.querySelector('.tool-step.current');
+        if (lastStep) {
+            lastStep.classList.remove('current');
+            lastStep.classList.add('done');
+            lastStep.querySelector('.tool-step-icon').textContent = '✓';
+        }
+        // Make activity collapsible after completion
+        if (activity.children.length > 0) {
+            activity.setAttribute('data-count', activity.querySelectorAll('.tool-step').length);
+            activity.classList.add('completed');
+            activity.addEventListener('click', () => {
+                activity.classList.toggle('expanded');
+            });
+        } else {
+            activity.remove();
+        }
+    }
 
     // Remove raw streaming content
     const raw = $('#streaming-content');
@@ -279,6 +336,9 @@ function connectWebSocket() {
                 break;
             case 'chunk':
                 appendStreamChunk(data.content);
+                break;
+            case 'tool':
+                appendToolActivity(data.tool_name, data.description);
                 break;
             case 'done':
                 state.isStreaming = false;
@@ -685,6 +745,28 @@ async function loadFileTree() {
     }
 }
 
+async function loadModels() {
+    try {
+        const groups = await api('/api/models');
+        const select = els.modelSelect;
+        // Keep the default option, remove the rest
+        while (select.options.length > 1) select.remove(1);
+        groups.forEach((group) => {
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = group.group;
+            group.models.forEach((m) => {
+                const opt = document.createElement('option');
+                opt.value = m.id;
+                opt.textContent = m.name;
+                optgroup.appendChild(opt);
+            });
+            select.appendChild(optgroup);
+        });
+    } catch (e) {
+        console.warn('Failed to load models:', e);
+    }
+}
+
 function renderFileTree(nodes, container, depth) {
     container.innerHTML = '';
     nodes.forEach((node) => {
@@ -844,7 +926,7 @@ async function init() {
     connectWebSocket();
 
     // Load data
-    await Promise.all([loadAgents(), loadSkills(), loadSessions(), loadFileTree()]);
+    await Promise.all([loadAgents(), loadSkills(), loadSessions(), loadFileTree(), loadModels()]);
 }
 
 document.addEventListener('DOMContentLoaded', init);

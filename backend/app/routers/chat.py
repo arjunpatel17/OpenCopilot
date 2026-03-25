@@ -8,6 +8,7 @@ from app.models.chat import (
     MessageRole, MessageContent, MessageContentType,
 )
 from app.services import copilot, session_manager, response_parser, blob_storage
+from app.services.copilot import TOOL_EVENT_PREFIX
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -134,6 +135,22 @@ async def chat_stream(websocket: WebSocket):
                 stream = copilot.run_gh_copilot(prompt, model_name=model_name)
 
             async for chunk in stream:
+                # Detect structured tool event markers and send as separate message type
+                stripped = chunk.strip()
+                if stripped.startswith(TOOL_EVENT_PREFIX):
+                    marker = stripped[len(TOOL_EVENT_PREFIX):]
+                    parts = marker.split("|", 1)
+                    tool_name = parts[0]
+                    tool_desc = parts[1] if len(parts) > 1 else tool_name
+                    await websocket.send_text(json.dumps({
+                        "type": "tool",
+                        "tool_name": tool_name,
+                        "description": tool_desc,
+                    }))
+                    continue
+                # Skip bare turn separators
+                if stripped == '---':
+                    continue
                 full_output.append(chunk)
                 await websocket.send_text(json.dumps({
                     "type": "chunk",

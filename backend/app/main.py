@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -8,11 +9,26 @@ from app.routers import agents, skills, chat, files, telegram
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("app").setLevel(logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: discover available models from Copilot CLI
+    try:
+        from app.services.copilot import discover_models
+        models = await discover_models()
+        logger.info("Discovered %d model groups at startup", len(models))
+    except Exception:
+        logger.exception("Model discovery failed at startup, using defaults")
+    yield
+
 
 app = FastAPI(
     title="OpenCopilot API",
     description="Run GitHub Copilot agents and commands via REST/WebSocket API",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -26,6 +42,11 @@ app.add_middleware(
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+@app.get("/api/models")
+async def list_models():
+    from app.services.copilot import get_models
+    return get_models()
 
 app.include_router(agents.router)
 app.include_router(skills.router)
