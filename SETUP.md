@@ -1,6 +1,6 @@
 # OpenCopilot Setup Guide
 
-Run GitHub Copilot agents and commands from a website, Telegram bot, or API — deployed on Azure.
+Run GitHub Copilot agents and commands from a Telegram bot or API — deployed on Azure. The web dashboard provides a file explorer and real-time process log viewer.
 
 ---
 
@@ -86,9 +86,9 @@ source .venv/bin/activate
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Open **http://localhost:8000** in your browser.
+Open **http://localhost:8000** in your browser to access the file explorer and process log viewer.
 
-> **Note**: Chat requires `gh copilot` to work. Ensure `gh auth login` is complete and Copilot CLI is installed.
+> **Note**: Copilot commands are triggered via Telegram or the API. The web UI shows generated files and live process logs.
 
 ---
 
@@ -204,9 +204,10 @@ OpenCopilot/
 │   │   │   ├── skills.py        # Skill CRUD API
 │   │   │   ├── chat.py          # Chat (WebSocket + REST)
 │   │   │   ├── files.py         # File explorer API
+│   │   │   ├── logs.py          # Process logs (REST + WebSocket)
 │   │   │   └── telegram.py      # Telegram webhook
 │   │   ├── services/
-│   │   │   ├── copilot.py       # Copilot CLI wrapper
+│   │   │   ├── copilot.py       # Copilot CLI wrapper + activity log
 │   │   │   ├── agent_parser.py  # .agent.md parser
 │   │   │   ├── blob_storage.py  # Azure Blob / local storage
 │   │   │   ├── response_parser.py
@@ -216,9 +217,9 @@ OpenCopilot/
 │   ├── requirements.txt
 │   └── .env                     # Local config (not committed)
 ├── frontend/
-│   ├── index.html               # Chat UI
+│   ├── index.html               # File explorer + process logs UI
 │   ├── css/style.css            # VS Code dark theme
-│   └── js/app.js                # Chat, voice, file explorer
+│   └── js/app.js                # File tree, logs WebSocket
 ├── workspace/
 │   └── .github/
 │       ├── agents/              # .agent.md files
@@ -250,6 +251,8 @@ OpenCopilot/
 | `/api/files/upload` | POST | Upload file |
 | `/api/files/download/{path}` | GET | Download file/folder |
 | `/api/files/{path}` | DELETE | Delete file |
+| `/api/logs/snapshot` | GET | Current log buffer + active process |
+| `/api/logs/stream` | WebSocket | Live process log stream |
 | `/api/telegram/webhook` | POST | Telegram webhook |
 | `/api/telegram/setup-webhook` | POST | Register webhook |
 | `/api/telegram/webhook` | DELETE | Remove webhook |

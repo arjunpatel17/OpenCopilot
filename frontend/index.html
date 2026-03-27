@@ -13,151 +13,53 @@
 </head>
 <body>
     <div id="app">
-        <!-- Sidebar -->
-        <aside id="sidebar" class="sidebar">
-            <div class="sidebar-resize-handle" id="sidebar-resize"></div>
-            <div class="sidebar-header">
+        <!-- File Explorer Panel -->
+        <aside id="file-panel" class="file-panel">
+            <div class="panel-header">
                 <h1 class="logo">⚡ OpenCopilot</h1>
-                <button id="sidebar-toggle" class="icon-btn" title="Toggle sidebar">☰</button>
             </div>
-
-            <!-- Sidebar tabs -->
-            <div class="sidebar-tabs">
-                <button class="sidebar-tab active" data-tab="chat-sessions">💬 Chats</button>
-                <button class="sidebar-tab" data-tab="agents-panel">🤖 Agents</button>
-                <button class="sidebar-tab" data-tab="skills-panel">🧩 Skills</button>
-                <button class="sidebar-tab" data-tab="files-panel">📁 Files</button>
-            </div>
-
-            <!-- Chat Sessions Panel -->
-            <div id="chat-sessions" class="sidebar-panel active">
-                <div class="panel-header">
-                    <span>Chat History</span>
-                    <button id="new-chat-btn" class="small-btn" title="New chat">+ New</button>
+            <div class="panel-toolbar">
+                <span class="panel-title">File Explorer</span>
+                <div class="toolbar-actions">
+                    <label class="tool-btn" title="Upload file">
+                        ⬆
+                        <input type="file" id="upload-input" style="display:none" multiple />
+                    </label>
+                    <button id="refresh-btn" class="tool-btn" title="Refresh">↻</button>
                 </div>
-                <div id="sessions-list" class="item-list"></div>
             </div>
-
-            <!-- Agents Panel -->
-            <div id="agents-panel" class="sidebar-panel">
-                <div class="panel-header">
-                    <span>Agents</span>
-                    <button id="new-agent-btn" class="small-btn" title="Create agent">+ New</button>
-                </div>
-                <div id="agents-list" class="item-list"></div>
-            </div>
-
-            <!-- Skills Panel -->
-            <div id="skills-panel" class="sidebar-panel">
-                <div class="panel-header">
-                    <span>Skills</span>
-                    <button id="new-skill-btn" class="small-btn" title="Create skill">+ New</button>
-                </div>
-                <div id="skills-list" class="item-list"></div>
-            </div>
-
-            <!-- File Explorer Panel -->
-            <div id="files-panel" class="sidebar-panel">
-                <div class="panel-header">
-                    <span>File Explorer</span>
-                    <button id="refresh-files-btn" class="small-btn" title="Refresh">↻</button>
-                </div>
-                <div id="file-tree" class="file-tree"></div>
-            </div>
+            <div id="file-tree" class="file-tree"></div>
         </aside>
 
-        <!-- Main Content -->
-        <main id="main-content">
-            <!-- Chat area -->
-            <div id="chat-container">
-                <!-- Agent selector bar -->
-                <div id="agent-bar">
-                    <select id="agent-select">
-                        <option value="">Freeform (gh copilot)</option>
-                    </select>
-                    <select id="model-select">
-                        <option value="">Default</option>
-                    </select>
-                    <span id="agent-hint" class="agent-hint"></span>
-                </div>
+        <!-- Resize handle -->
+        <div id="resize-handle" class="resize-handle"></div>
 
-                <!-- Messages -->
-                <div id="messages" class="messages"></div>
-
-                <!-- Input area -->
-                <div id="input-area">
-                    <div id="image-preview-bar" class="image-preview-bar hidden">
-                        <img id="attached-image-thumb" class="attached-thumb" />
-                        <span id="attached-image-name" class="attached-name"></span>
-                        <button id="remove-image-btn" class="icon-btn" title="Remove image">✕</button>
-                    </div>
-                    <div class="input-wrapper">
-                        <textarea id="chat-input" placeholder="Ask Copilot anything, or use /agent-name to run an agent..." rows="1"></textarea>
-                        <div class="input-actions">
-                            <label id="attach-btn" class="icon-btn" title="Attach image">
-                                📎
-                                <input type="file" id="image-input" accept="image/*" style="display:none" />
-                            </label>
-                            <button id="voice-btn" class="icon-btn" title="Voice input">🎤</button>
-                            <button id="send-btn" class="icon-btn send-btn" title="Send message">➤</button>
-                        </div>
-                    </div>
-                    <div id="voice-indicator" class="voice-indicator hidden">
-                        <span class="pulse"></span> Listening...
-                    </div>
+        <!-- Main Panel: Process Logs -->
+        <main id="main-panel" class="main-panel">
+            <div class="panel-toolbar">
+                <span class="panel-title" id="logs-title">Process Logs</span>
+                <div class="toolbar-actions">
+                    <span id="process-status" class="status-badge idle">Idle</span>
+                    <button id="clear-logs-btn" class="tool-btn" title="Clear logs">🗑</button>
+                    <button id="scroll-bottom-btn" class="tool-btn" title="Scroll to bottom">⬇</button>
                 </div>
             </div>
-
-            <!-- Editor modal (for creating/editing agents & skills) -->
-            <div id="editor-modal" class="modal hidden">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h2 id="editor-title">Edit Agent</h2>
-                        <button id="editor-close" class="icon-btn">✕</button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="form-group">
-                            <label for="editor-name">Name</label>
-                            <input type="text" id="editor-name" placeholder="my-agent">
-                        </div>
-                        <div class="form-group">
-                            <label for="editor-description">Description</label>
-                            <textarea id="editor-description" rows="2" placeholder="What this agent does..."></textarea>
-                        </div>
-                        <div class="form-group" id="editor-tools-group">
-                            <label for="editor-tools">Tools (comma-separated)</label>
-                            <input type="text" id="editor-tools" placeholder="edit, agent, search, web">
-                        </div>
-                        <div class="form-group" id="editor-skills-group">
-                            <label for="editor-skills">Skills (comma-separated)</label>
-                            <input type="text" id="editor-skills" placeholder="skill-1, skill-2">
-                        </div>
-                        <div class="form-group">
-                            <label for="editor-body">Content (Markdown)</label>
-                            <textarea id="editor-body" rows="15" placeholder="Agent/skill instructions..."></textarea>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button id="editor-cancel" class="btn btn-secondary">Cancel</button>
-                        <button id="editor-save" class="btn btn-primary">Save</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- File preview modal -->
-            <div id="file-preview-modal" class="modal hidden">
-                <div class="modal-content modal-large">
-                    <div class="modal-header">
-                        <h2 id="file-preview-title">File Preview</h2>
-                        <div class="modal-header-actions">
-                            <button id="file-download-btn" class="small-btn">⬇ Download</button>
-                            <button id="file-preview-close" class="icon-btn">✕</button>
-                        </div>
-                    </div>
-                    <div id="file-preview-body" class="modal-body file-preview-body"></div>
-                </div>
-            </div>
+            <div id="logs-container" class="logs-container"></div>
         </main>
+    </div>
+
+    <!-- File preview modal -->
+    <div id="file-preview-modal" class="modal hidden">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2 id="file-preview-title">File Preview</h2>
+                <div class="modal-header-actions">
+                    <button id="file-download-btn" class="small-btn">⬇ Download</button>
+                    <button id="file-preview-close" class="icon-btn">✕</button>
+                </div>
+            </div>
+            <div id="file-preview-body" class="modal-body file-preview-body"></div>
+        </div>
     </div>
 
     <script src="js/app.js"></script>

@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from app.config import settings
-from app.routers import agents, skills, chat, files, telegram
+from app.routers import agents, skills, chat, files, telegram, logs
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("app").setLevel(logging.DEBUG)
@@ -53,6 +53,7 @@ app.include_router(skills.router)
 app.include_router(chat.router)
 app.include_router(files.router)
 app.include_router(telegram.router)
+app.include_router(logs.router)
 
 # Serve frontend static files (must be last — catches all unmatched routes)
 frontend_dir = Path(__file__).parent.parent.parent / "frontend"

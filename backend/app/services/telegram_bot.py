@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import httpx
+from collections import deque
 from pathlib import Path
 from telegram import Update, Bot
 from telegram.constants import ChatAction
@@ -14,6 +15,51 @@ logger.setLevel(logging.DEBUG)
 
 AGENT_CMD_PREFIX = "/agent "
 MODEL_FLAG_RE = re.compile(r'--model\s+(\S+)')
+
+# ========== Chat history (in-memory, per Telegram chat_id) ==========
+
+MAX_HISTORY_TURNS = 10           # max user+assistant pairs to keep
+MAX_HISTORY_CHARS = 4000         # hard cap on total history text length
+
+# chat_id -> deque of (role, text) tuples
+_chat_histories: dict[int, deque] = {}
+
+
+def _get_history(chat_id: int) -> deque:
+    if chat_id not in _chat_histories:
+        _chat_histories[chat_id] = deque(maxlen=MAX_HISTORY_TURNS * 2)
+    return _chat_histories[chat_id]
+
+
+def _record_message(chat_id: int, role: str, text: str) -> None:
+    """Append a message to the history for a Telegram chat."""
+    _get_history(chat_id).append((role, text))
+
+
+def _clear_history(chat_id: int) -> None:
+    _chat_histories.pop(chat_id, None)
+
+
+def _format_history(chat_id: int) -> str:
+    """Build a conversation transcript from recent history."""
+    history = _get_history(chat_id)
+    if not history:
+        return ""
+    lines: list[str] = []
+    total = 0
+    # Walk backwards to respect the char cap, then reverse
+    selected: list[tuple[str, str]] = []
+    for role, text in reversed(history):
+        entry_len = len(text) + 20  # role label overhead
+        if total + entry_len > MAX_HISTORY_CHARS:
+            break
+        selected.append((role, text))
+        total += entry_len
+    selected.reverse()
+    for role, text in selected:
+        label = "User" if role == "user" else "Assistant"
+        lines.append(f"{label}: {text}")
+    return "\n".join(lines)
 
 
 def _is_user_allowed(username: str | None) -> bool:
@@ -48,6 +94,7 @@ HELP_TEXT = (
     "`/mcps` — List MCP servers\n"
     "`/files` — List workspace files\n"
     "`/version` — Show CLI version\n"
+    "`/clear` — Clear conversation history\n"
     "`/help` — Show this help\n\n"
     "*CLI pass\\-through:*\n"
     "`/explain <prompt>` — Explain code or concepts\n"
@@ -259,6 +306,10 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
     if cmd in ("/start", "/help"):
         await _handle_cmd_help(bot, chat_id)
         return
+    if cmd == "/clear":
+        _clear_history(chat_id)
+        await bot.send_message(chat_id=chat_id, text="🗑 Chat history cleared.")
+        return
     if cmd == "/agents":
         await _handle_cmd_agents(bot, chat_id)
         return
@@ -327,18 +378,6 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
         await bot.send_message(chat_id=chat_id, text="Please provide a message or prompt.")
         return
 
-    # Send initial status message
-    mode_label = "plan" if mode == "plan" else "agent"
-    model_info = f" ({model_name})" if model_name else ""
-    if agent_name:
-        status_msg = await bot.send_message(
-            chat_id=chat_id,
-            text=f"⏳ Running `{agent_name}` in {mode_label} mode{model_info}... This may take a few minutes.",
-        )
-    else:
-        status_label = f"📋 Planning{model_info}..." if mode == "plan" else f"⏳ Processing{model_info}..."
-        status_msg = await bot.send_message(chat_id=chat_id, text=status_label)
-
     # Keep typing indicator alive while processing
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(_send_typing_loop(bot, chat_id, stop_typing))
@@ -346,71 +385,119 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
     # Ensure workspace directories exist
     copilot.ensure_workspace_dirs()
 
-    # Stream output from Copilot — send incremental messages
+    # Stream output from Copilot — edit a single message in-place
     try:
-        buffer = ""
-        last_send_time = asyncio.get_event_loop().time()
-        send_interval = 3  # seconds between incremental sends
-        sent_any = False
-        tool_history = []  # track tools used for status updates
+        full_response_parts = []  # accumulate all text for history
+        last_edit_time = asyncio.get_event_loop().time()
+        edit_interval = 2  # seconds between edits (avoid Telegram rate limits)
+
+        # The response message we'll keep editing (created on first text)
+        response_msg = None
+        response_text = ""       # full text of current response message
+        TG_MSG_LIMIT = 4096
+        overflow_msgs = []       # any prior messages that overflowed
+
+        # Build conversation history prefix
+        history_text = _format_history(chat_id)
+
+        # Record user message in history
+        _record_message(chat_id, "user", prompt)
 
         if mode == "plan":
-            stream = copilot.run_plan_mode(prompt, agent_name, model_name=model_name)
+            stream = copilot.run_plan_mode(prompt, agent_name, model_name=model_name, history=history_text)
         elif agent_name:
-            stream = copilot.run_with_agent(prompt, agent_name, model_name=model_name)
+            stream = copilot.run_with_agent(prompt, agent_name, model_name=model_name, history=history_text)
         else:
-            stream = copilot.run_gh_copilot(prompt, model_name=model_name)
+            stream = copilot.run_gh_copilot(prompt, model_name=model_name, history=history_text)
 
         logger.warning("Starting copilot stream (%s mode) for chat %s", mode, chat_id)
 
         async for chunk in stream:
-            # Detect structured tool event markers from copilot stream
+            # Convert tool event markers into readable lines
             if chunk.strip().startswith(TOOL_EVENT_PREFIX):
                 marker = chunk.strip()[len(TOOL_EVENT_PREFIX):]
                 parts = marker.split("|", 1)
-                tool_name = parts[0]
-                tool_desc = parts[1] if len(parts) > 1 else tool_name
-                tool_history.append(tool_desc)
-                # Update the status message with current tool activity
-                status_text = _build_status_text(agent_name, mode, tool_history)
-                try:
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=status_msg.message_id,
-                        text=status_text,
-                    )
-                except Exception:
-                    pass  # edit may fail if message hasn't changed
-                continue
+                desc = parts[1] if len(parts) > 1 else parts[0]
+                tool_line = f"⚡ {desc}\n"
+                full_response_parts.append(tool_line)
+                response_text += tool_line
+                # fall through to the edit logic below
+            else:
+                # Skip bare turn separators
+                if chunk.strip() == '---':
+                    continue
 
-            # Skip bare turn separators from being buffered
-            if chunk.strip() == '---':
-                continue
+                full_response_parts.append(chunk)
+                response_text += chunk
 
-            buffer += chunk
+            # If we'd exceed the Telegram limit, finalize current message
+            # and start a new one
+            if len(response_text) > TG_MSG_LIMIT - 100:
+                cleaned = _clean_output(response_text[:TG_MSG_LIMIT])
+                if response_msg and cleaned.strip():
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=response_msg.message_id,
+                            text=cleaned[:TG_MSG_LIMIT],
+                        )
+                    except Exception:
+                        pass
+                    overflow_msgs.append(response_msg)
+                # Start fresh message for the overflow
+                response_msg = None
+                response_text = response_text[TG_MSG_LIMIT:]
+
             now = asyncio.get_event_loop().time()
-            # Send buffered text periodically to show progress
-            if now - last_send_time >= send_interval and buffer.strip():
-                cleaned = _clean_output(buffer)
-                if cleaned:
-                    for msg_chunk in _split_message(cleaned):
-                        await bot.send_message(chat_id=chat_id, text=msg_chunk)
-                        sent_any = True
-                    buffer = ""
-                    last_send_time = now
+            if now - last_edit_time >= edit_interval and response_text.strip():
+                cleaned = _clean_output(response_text)
+                if cleaned.strip():
+                    if response_msg is None:
+                        # Create the first response message
+                        response_msg = await bot.send_message(
+                            chat_id=chat_id, text=cleaned[:TG_MSG_LIMIT]
+                        )
+                    else:
+                        try:
+                            await bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=response_msg.message_id,
+                                text=cleaned[:TG_MSG_LIMIT],
+                            )
+                        except Exception:
+                            pass  # edit fails if text hasn't changed
+                    last_edit_time = now
 
-        logger.warning("Copilot stream ended for chat %s, buffer remaining: %d chars", chat_id, len(buffer))
+        logger.warning("Copilot stream ended for chat %s", chat_id)
 
-        # Send any remaining text
-        if buffer.strip():
-            cleaned = _clean_output(buffer)
+        # Final edit with complete remaining text
+        if response_text.strip():
+            cleaned = _clean_output(response_text)
             if cleaned.strip():
                 for msg_chunk in _split_message(cleaned):
-                    await bot.send_message(chat_id=chat_id, text=msg_chunk)
-                    sent_any = True
+                    if response_msg is None:
+                        response_msg = await bot.send_message(
+                            chat_id=chat_id, text=msg_chunk
+                        )
+                    else:
+                        try:
+                            await bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=response_msg.message_id,
+                                text=msg_chunk,
+                            )
+                        except Exception:
+                            pass
+                        # If there are more chunks after this, we need new messages
+                        response_msg = None
 
-        if not sent_any:
+        if response_msg is None and not overflow_msgs:
             await bot.send_message(chat_id=chat_id, text="_(No response from Copilot)_")
+
+        # Record assistant response in history
+        full_response = _clean_output("".join(full_response_parts)).strip()
+        if full_response:
+            _record_message(chat_id, "assistant", full_response[:2000])
 
     except Exception as e:
         logger.exception("Copilot execution failed for chat %s", chat_id)
@@ -422,12 +509,6 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
     # Sync any files created by copilot to blob storage
     from app.services import blob_storage
     synced = blob_storage.sync_workspace_to_storage()
-
-    # Delete the "processing" message
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
-    except Exception:
-        pass
 
     # Notify about generated files
     if synced > 0:

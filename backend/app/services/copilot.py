@@ -3,6 +3,8 @@ import json
 import logging
 import os
 import shutil
+import time
+from collections import deque
 from pathlib import Path
 from typing import AsyncIterator
 from app.config import settings
@@ -16,6 +18,53 @@ PLAN_MODE_TOOLS = ["read", "search", "web"]
 
 # Marker prefix for tool events (not normal text — parsed by callers)
 TOOL_EVENT_PREFIX = "\x00TOOL:"
+
+
+# ========== Process activity log (in-memory, shared across callers) ==========
+
+MAX_LOG_LINES = 500
+
+_activity_log: deque[dict] = deque(maxlen=MAX_LOG_LINES)
+_log_subscribers: list[asyncio.Queue] = []
+_active_process: dict | None = None  # tracks current running process info
+
+
+def _emit_log(entry: dict) -> None:
+    """Add a log entry and notify all subscribers."""
+    entry.setdefault("ts", time.time())
+    _activity_log.append(entry)
+    dead = []
+    for q in _log_subscribers:
+        try:
+            q.put_nowait(entry)
+        except asyncio.QueueFull:
+            dead.append(q)
+    for q in dead:
+        _log_subscribers.remove(q)
+
+
+def subscribe_logs() -> asyncio.Queue:
+    """Subscribe to live log entries. Returns a Queue that receives new entries."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=200)
+    _log_subscribers.append(q)
+    return q
+
+
+def unsubscribe_logs(q: asyncio.Queue) -> None:
+    try:
+        _log_subscribers.remove(q)
+    except ValueError:
+        pass
+
+
+def get_log_snapshot() -> list[dict]:
+    """Return current log buffer."""
+    return list(_activity_log)
+
+
+def get_active_process() -> dict | None:
+    """Return info about the currently running process, if any."""
+    return _active_process
 
 
 def _find_cli(name: str) -> str | None:
@@ -164,6 +213,17 @@ def _summarize_tool_call(tool_name: str, arguments: dict) -> str:
     return tool_name
 
 
+def _prepend_history(prompt: str, history: str | None) -> str:
+    """If history is provided, prepend it as conversation context."""
+    if not history:
+        return prompt
+    return (
+        "Previous conversation for context (do NOT repeat previous answers, "
+        "just use this to understand what the user is referring to):\n\n"
+        f"{history}\n\n---\nCurrent request: {prompt}"
+    )
+
+
 async def run_code_chat(prompt: str, agent_name: str | None = None, *, model_name: str | None = None) -> AsyncIterator[str]:
     """Run an agent. Tries `code chat` first, falls back to gh copilot with agent instructions."""
     code_path = _find_cli("code")
@@ -183,8 +243,9 @@ async def run_code_chat(prompt: str, agent_name: str | None = None, *, model_nam
         yield chunk
 
 
-async def run_with_agent(prompt: str, agent_name: str | None = None, *, model_name: str | None = None) -> AsyncIterator[str]:
+async def run_with_agent(prompt: str, agent_name: str | None = None, *, model_name: str | None = None, history: str | None = None) -> AsyncIterator[str]:
     """Run a prompt with agent instructions injected, via gh copilot."""
+    prompt = _prepend_history(prompt, history)
     if agent_name:
         instructions = _load_agent_instructions(agent_name)
         if instructions:
@@ -199,8 +260,10 @@ async def run_with_agent(prompt: str, agent_name: str | None = None, *, model_na
         yield chunk
 
 
-async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> AsyncIterator[str]:
+async def run_gh_copilot(prompt: str, *, model_name: str | None = None, history: str | None = None) -> AsyncIterator[str]:
     """Run `gh copilot -p` with JSON output and yield text chunks until the turn ends."""
+    global _active_process
+    prompt = _prepend_history(prompt, history)
     # Prefer standalone copilot binary, fall back to gh copilot wrapper
     copilot_path = _find_cli("copilot")
     gh_path = _find_cli("gh")
@@ -216,6 +279,11 @@ async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> Async
     if model:
         args.extend(["--model", model])
     args.extend(["-p", prompt])
+
+    # Truncate prompt for display
+    display_prompt = prompt[:120] + ("..." if len(prompt) > 120 else "")
+    _active_process = {"prompt": display_prompt, "model": model, "started": time.time(), "status": "running"}
+    _emit_log({"type": "process_start", "prompt": display_prompt, "model": model})
 
     try:
         process = await asyncio.create_subprocess_exec(
@@ -285,6 +353,7 @@ async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> Async
                     delta = event.get("data", {}).get("deltaContent", "")
                     if delta:
                         got_any_delta = True
+                        _emit_log({"type": "text_delta", "content": delta})
                         yield delta
 
                 # Show tool execution activity
@@ -292,6 +361,7 @@ async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> Async
                     tool_name = event.get("data", {}).get("toolName", "")
                     if tool_name:
                         desc = _summarize_tool_call(tool_name, event.get("data", {}).get("arguments", {}))
+                        _emit_log({"type": "tool_start", "tool": tool_name, "description": desc})
                         yield f"{TOOL_EVENT_PREFIX}{tool_name}|{desc}\n"
 
                 # Show new turn starting (after tool results return)
@@ -317,6 +387,8 @@ async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> Async
     except Exception as e:
         yield f"[Error]: {e}"
     finally:
+        _active_process = None
+        _emit_log({"type": "process_end"})
         if process.returncode is None:
             process.kill()
         try:
@@ -327,8 +399,9 @@ async def run_gh_copilot(prompt: str, *, model_name: str | None = None) -> Async
 
 # ========== Plan mode (read-only, no edits/shell) ==========
 
-async def run_plan_mode(prompt: str, agent_name: str | None = None, *, model_name: str | None = None) -> AsyncIterator[str]:
+async def run_plan_mode(prompt: str, agent_name: str | None = None, *, model_name: str | None = None, history: str | None = None) -> AsyncIterator[str]:
     """Run copilot in plan mode — read-only tools, no edits or shell commands."""
+    prompt = _prepend_history(prompt, history)
     if agent_name:
         instructions = _load_agent_instructions(agent_name)
         if instructions:
@@ -368,8 +441,18 @@ async def run_plan_mode(prompt: str, agent_name: str | None = None, *, model_nam
         args.extend(["--model", model])
     args.extend(["-p", combined])
 
-    async for chunk in _run_jsonl_stream(args):
-        yield chunk
+    # Track process for logs
+    global _active_process
+    display_prompt = prompt[:120] + ("..." if len(prompt) > 120 else "")
+    _active_process = {"prompt": display_prompt, "model": model, "started": time.time(), "status": "running"}
+    _emit_log({"type": "process_start", "prompt": display_prompt, "model": model})
+
+    try:
+        async for chunk in _run_jsonl_stream(args):
+            yield chunk
+    finally:
+        _active_process = None
+        _emit_log({"type": "process_end"})
 
 
 # ========== Shared JSONL stream reader ==========
@@ -441,12 +524,14 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
                     delta = event.get("data", {}).get("deltaContent", "")
                     if delta:
                         got_any_delta = True
+                        _emit_log({"type": "text_delta", "content": delta})
                         yield delta
 
                 elif event_type == "tool.execution_start":
                     tool_name = event.get("data", {}).get("toolName", "")
                     if tool_name:
                         desc = _summarize_tool_call(tool_name, event.get("data", {}).get("arguments", {}))
+                        _emit_log({"type": "tool_start", "tool": tool_name, "description": desc})
                         yield f"{TOOL_EVENT_PREFIX}{tool_name}|{desc}\n"
 
                 elif event_type == "assistant.turn_start":
