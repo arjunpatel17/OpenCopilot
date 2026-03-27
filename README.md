@@ -149,14 +149,92 @@ The script will:
 1. Open the link printed by the script: `https://t.me/your_bot_username`
 2. Press **Start**
 3. Send any message — Copilot responds
-4. Use `/agent agent-name prompt` to run specific agents
 
-**Examples:**
+---
+
+## Telegram Bot Usage Guide
+
+### Sending prompts
+
+Just send any message to chat with GitHub Copilot. The bot streams the response in real time, editing a single message as text comes in. You'll see tool activity (file reads, web searches, shell commands) inline as `⚡` lines.
+
+The bot maintains **conversation history** (last 10 turns per chat), so follow-up messages like "expand on that" or "now do the same for MSFT" will have context from prior exchanges.
+
+### Running agents
+
+Use `/agent` or shorthand `/agent-name` to run a specific agent with full tool access:
+
 ```
-hi
-/agent stock-analysis AAPL 242.50
+/agent stock-analysis AAPL at $242.50
 /agent business-plan-analysis AI-powered resume builder SaaS
 /agent book-creator A self-help book on building discipline
+/real-estate-analysis 505 Regency Trl, Acworth GA
+```
+
+### Plan mode (read-only)
+
+Use `/plan` for analysis without file edits or shell commands:
+
+```
+/plan Analyze the codebase and propose refactoring
+/plan stock-analysis AAPL at $242.50
+```
+
+When an agent name is provided after `/plan`, it uses that agent's instructions in read-only mode.
+
+### Other prompt commands
+
+| Command | Description |
+|---------|-------------|
+| `/explain <prompt>` | Ask Copilot to explain code or concepts |
+| `/suggest <prompt>` | Get a shell command suggestion |
+
+### Model selection
+
+Add `--model <id>` to any message to use a specific model:
+
+```
+--model claude-opus-4.6-1m explain quantum computing
+/agent stock-analysis --model gpt-5.4 AAPL
+```
+
+### Introspection commands
+
+| Command | Description |
+|---------|-------------|
+| `/files` | List all workspace files with clickable links to view/download each one |
+| `/agents` | List available agents |
+| `/skills` | List available skills |
+| `/models` | List available AI models |
+| `/mcps` | List configured MCP servers |
+| `/version` | Show Copilot CLI version |
+
+### Utility commands
+
+| Command | Description |
+|---------|-------------|
+| `/clear` | Clear conversation history for the current chat |
+| `/help` | Show the help menu |
+
+### File output
+
+When an agent generates files (reports, code, etc.), the bot sends a summary with **clickable links** to view each file directly. A link to the web file explorer is also included.
+
+### Voice & image input
+
+- **Voice messages**: Automatically transcribed and sent as text prompts (requires Azure Speech key)
+- **Images**: Attached images are saved to the workspace and the agent is asked to analyze them
+
+### Examples
+
+```
+hi, help me write a Python script
+/agent stock-analysis AAPL at $242.50
+/plan Analyze the codebase and propose refactoring
+/explain What does asyncio.gather do?
+/suggest find all Python files larger than 1MB
+/files
+/clear
 ```
 
 ---

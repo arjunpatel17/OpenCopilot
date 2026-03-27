@@ -186,20 +186,38 @@ async def _handle_cmd_files(bot: Bot, chat_id: int) -> None:
         await bot.send_message(chat_id=chat_id, text="📁 Workspace is empty.")
         return
 
+    # Derive app base URL from webhook
+    app_base_url = ""
+    try:
+        webhook_info = await bot.get_webhook_info()
+        if webhook_info.url:
+            app_base_url = webhook_info.url.replace("/api/telegram/webhook", "")
+    except Exception:
+        pass
+
     lines = ["📁 *Workspace Files:*\n"]
 
-    def _render_tree(nodes, depth=0):
+    def _render_tree(nodes, prefix="", depth=0):
         for node in nodes:
             indent = "  " * depth
-            icon = "📁" if node.is_folder else "📄"
-            lines.append(f"{indent}{icon} {node.name}")
-            if node.is_folder and node.children:
-                _render_tree(node.children, depth + 1)
+            path = f"{prefix}/{node.name}" if prefix else node.name
+            if node.is_folder:
+                lines.append(f"{indent}📁 {node.name}")
+                if node.children:
+                    _render_tree(node.children, path, depth + 1)
+            else:
+                icon = "📄"
+                if app_base_url:
+                    lines.append(f"{indent}{icon} [{node.name}]({app_base_url}/api/files/content/{path})")
+                else:
+                    lines.append(f"{indent}{icon} {node.name}")
 
     _render_tree(tree)
+    if app_base_url:
+        lines.append(f"\n[Open File Explorer]({app_base_url})")
     text = "\n".join(lines)
     for chunk in _split_message(text):
-        await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
+        await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown", disable_web_page_preview=True)
 
 
 async def _handle_cmd_version(bot: Bot, chat_id: int) -> None:
@@ -385,6 +403,9 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
     # Ensure workspace directories exist
     copilot.ensure_workspace_dirs()
 
+    # Snapshot existing workspace files before the run
+    existing_files = _snapshot_workspace_files()
+
     # Stream output from Copilot — edit a single message in-place
     try:
         full_response_parts = []  # accumulate all text for history
@@ -508,39 +529,75 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
 
     # Sync any files created by copilot to blob storage
     from app.services import blob_storage
-    synced = blob_storage.sync_workspace_to_storage()
+    blob_storage.sync_workspace_to_storage()
+
+    # Determine which files are new (not in the pre-run snapshot)
+    current_files = _snapshot_workspace_files()
+    new_files = sorted(current_files - existing_files)
 
     # Notify about generated files
-    if synced > 0:
+    if new_files:
+        # Derive app base URL from webhook info
+        app_base_url = ""
+        try:
+            webhook_info = await bot.get_webhook_info()
+            if webhook_info.url:
+                # Strip /api/telegram/webhook to get base URL
+                app_base_url = webhook_info.url.replace("/api/telegram/webhook", "")
+        except Exception:
+            pass
+
         try:
             # Collect files from all output directories
-            generated = []
-            for prefix in ("projects", "reports", ""):
-                try:
-                    tree = blob_storage.get_file_tree(prefix)
-                    _collect_files(tree, prefix, generated)
-                except Exception:
-                    pass
+            generated = new_files
             if generated:
-                # Group by top-level folder
                 display = generated[:15]
-                file_list = "\n".join(f"• {f}" for f in display)
+                if app_base_url:
+                    file_list = "\n".join(
+                        f"• [{f}]({app_base_url}/api/files/content/{f})" for f in display
+                    )
+                else:
+                    file_list = "\n".join(f"• {f}" for f in display)
                 extra = f"\n  _...and {len(generated) - 15} more_" if len(generated) > 15 else ""
+                view_link = f"\n\n[Open File Explorer]({app_base_url})" if app_base_url else "\n\nView in the web app's File Explorer."
                 await bot.send_message(
                     chat_id=chat_id,
-                    text=f"📁 **{synced} file(s) generated:**\n{file_list}{extra}\n\nView or download in the web app's File Explorer.",
+                    text=f"📁 *{len(generated)} file(s) generated:*\n{file_list}{extra}{view_link}",
                     parse_mode="Markdown",
+                    disable_web_page_preview=True,
                 )
             else:
+                view_link = f" [Open File Explorer]({app_base_url})" if app_base_url else ""
                 await bot.send_message(
                     chat_id=chat_id,
-                    text=f"📁 {synced} file(s) were generated. View them in the web app's File Explorer.",
+                    text=f"📁 {len(new_files)} file(s) were generated.{view_link}",
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True,
                 )
         except Exception:
             await bot.send_message(
                 chat_id=chat_id,
-                text=f"📁 {synced} file(s) were generated. View them in the web app's File Explorer.",
+                text=f"📁 {len(new_files)} file(s) were generated.",
             )
+
+
+def _snapshot_workspace_files() -> set[str]:
+    """Return a set of relative file paths currently in the workspace."""
+    workspace = Path(settings.workspace_dir)
+    if not workspace.exists():
+        return set()
+    files = set()
+    for fp in workspace.rglob("*"):
+        if not fp.is_file():
+            continue
+        rel = fp.relative_to(workspace)
+        parts = rel.parts
+        if any((p.startswith(".") and p != ".github") or p == "__pycache__" for p in parts):
+            continue
+        if parts[0] == "sessions":
+            continue
+        files.add(str(rel))
+    return files
 
 
 def _collect_files(nodes, prefix: str, result: list, depth: int = 0):
