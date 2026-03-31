@@ -39,8 +39,14 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
 
     logger.info("Executing cron job %s: agent=%s prompt=%s", job.id, job.agent_name, job.prompt[:80])
 
-    # Run the agent and collect output
-    from app.services import copilot
+    # Snapshot workspace files before the run to detect new files afterward
+    from app.services import copilot, blob_storage
+    from pathlib import Path
+
+    workspace = Path(settings.workspace_dir)
+    before_files = set()
+    if workspace.exists():
+        before_files = {str(f.relative_to(workspace)) for f in workspace.rglob("*") if f.is_file()}
 
     chunks = []
     error = None
@@ -56,16 +62,48 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
 
     output = "".join(chunks).strip()
 
+    # Sync workspace files to blob storage
+    try:
+        blob_storage.sync_workspace_to_storage()
+    except Exception:
+        logger.exception("Failed to sync workspace after cron job %s", job.id)
+
+    # Collect content of any new files created during the run
+    generated_files: dict[str, str] = {}
+    if workspace.exists():
+        after_files = {str(f.relative_to(workspace)) for f in workspace.rglob("*") if f.is_file()}
+        new_files = after_files - before_files
+        for rel_path in sorted(new_files):
+            fp = workspace / rel_path
+            try:
+                generated_files[rel_path] = fp.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                generated_files[rel_path] = "(binary file)"
+
     # Update last_run timestamp
     cron_store.update_last_run(job.id)
 
-    # Send email with results
+    # Build email body with full report files included
     if error:
         subject = f"[OpenCopilot] Cron job failed: {job.agent_name}"
         body = f"Cron job '{job.agent_name}' (ID: {job.id}) failed.\n\nError: {error}\n\nPrompt: {job.prompt}"
     else:
         subject = f"[OpenCopilot] {job.agent_name} — scheduled report"
-        body = f"Cron job '{job.agent_name}' (ID: {job.id}) completed.\n\nPrompt: {job.prompt}\n\n{'=' * 60}\n\n{output}"
+        parts = [
+            f"Cron job '{job.agent_name}' (ID: {job.id}) completed.\n",
+            f"Prompt: {job.prompt}\n",
+            f"{'=' * 60}\n",
+            output,
+        ]
+        if generated_files:
+            parts.append(f"\n\n{'=' * 60}")
+            parts.append(f"\nGENERATED FILES ({len(generated_files)}):\n")
+            for path, content in generated_files.items():
+                parts.append(f"\n{'─' * 40}")
+                parts.append(f"📄 {path}")
+                parts.append(f"{'─' * 40}\n")
+                parts.append(content)
+        body = "\n".join(parts)
 
     email_sent = email_service.send_result_email(job.email, subject, body)
 
