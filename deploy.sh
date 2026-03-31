@@ -119,6 +119,24 @@ az containerapp create \
         "storage-conn=$STORAGE_CONNECTION_STRING" \
     --output none
 
+# Set a longer scale cooldown (30 min) so long-running agent tasks over
+# WebSocket don't get killed by a premature scale-to-zero.
+SCALE_YAML=$(mktemp)
+cat > "$SCALE_YAML" <<EOF
+properties:
+  template:
+    scale:
+      cooldownPeriod: 1800
+      minReplicas: 0
+      maxReplicas: 1
+EOF
+az containerapp update \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CONTAINER_APP_NAME" \
+    --yaml "$SCALE_YAML" \
+    --output none
+rm -f "$SCALE_YAML"
+
 # ---------- Get the app URL ----------
 APP_URL=$(az containerapp show \
     --resource-group "$RESOURCE_GROUP" \
