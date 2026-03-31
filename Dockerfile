@@ -18,10 +18,13 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub Copilot CLI (standalone)
-RUN npm install -g @github/copilot || true
+RUN npm install -g @github/copilot
 
 # Create workspace directory
 RUN mkdir -p /workspace/.github/agents /workspace/.github/skills
+
+# Initialize workspace as a git repo (copilot CLI discovers agents from git root)
+RUN git -C /workspace init
 
 WORKDIR /app
 

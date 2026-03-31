@@ -2,7 +2,7 @@
 
 ## Overview
 
-OpenCopilot is a cloud-native application that lets users run GitHub Copilot agents via a **web dashboard**, **REST/WebSocket API**, or **Telegram bot**. It wraps the GitHub Copilot CLI (`gh copilot` / `code chat`) with session management, file storage, real-time streaming, and a custom agent/skill system — all deployed on Azure.
+OpenCopilot is a cloud-native application that lets users run GitHub Copilot agents via a **web dashboard**, **REST/WebSocket API**, or **Telegram bot**. It wraps the standalone `copilot` CLI (`@github/copilot`) with session management, file storage, real-time streaming, and a custom agent/skill system — all deployed on Azure.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -33,8 +33,8 @@ OpenCopilot is a cloud-native application that lets users run GitHub Copilot age
 │       │                                │                         │
 │       ▼                                │                         │
 │  ┌──────────────────┐   ┌──────────────▼──┐                     │
-│  │ gh copilot CLI   │   │ In-Memory Log   │                     │
-│  │ / code chat CLI  │   │ Buffer + Queues │                     │
+│  │ copilot CLI       │   │ In-Memory Log   │                     │
+│  │ (@github/copilot) │   │ Buffer + Queues │                     │
 │  └──────────────────┘   └─────────────────┘                     │
 └─────────────────────────────────────────────────────────────────────┘
            │                                    │
@@ -51,7 +51,7 @@ OpenCopilot is a cloud-native application that lets users run GitHub Copilot age
 |-------|-----------|
 | Backend | Python 3.12, FastAPI, Uvicorn |
 | Frontend | Vanilla HTML/CSS/JS, WebSocket streaming |
-| AI | GitHub Copilot CLI — **`code chat`** (preferred, VS Code CLI) with **`gh copilot`** fallback |
+| AI | GitHub Copilot via standalone **`copilot`** CLI (`@github/copilot` npm package) |
 | Storage | Azure Blob Storage (prod) / local filesystem (dev) |
 | Auth | Azure Entra ID (JWT, RS256) — optional |
 | Chat Platform | Telegram Bot API (webhook) |
@@ -89,7 +89,7 @@ OpenCopilot is a cloud-native application that lets users run GitHub Copilot age
 │   ├── css/style.css            # Dark theme, VS Code-inspired
 │   └── js/app.js               # File tree, log streaming, preview modal
 ├── workspace/                   # Mounted volume for .agent.md / .skill.md files
-├── Dockerfile                   # Python 3.12 + gh CLI + Copilot extensions
+├── Dockerfile                   # Python 3.12 + standalone copilot CLI
 ├── deploy.sh                    # Provisions Azure resources, builds & deploys
 ├── update.sh                    # Rebuilds image and restarts container
 └── setup-telegram.sh            # Interactive Telegram bot setup
@@ -120,11 +120,8 @@ Client                    Backend                    Copilot CLI
 
 1. Client opens WebSocket to `/api/chat/stream` and sends JSON with message, optional agent name, and session ID.
 2. Backend loads or creates a `ChatSession`, saves the user message.
-3. If an agent is specified, the backend uses a **two-tier CLI strategy**:
-   - **Primary — `code chat`**: If the VS Code CLI (`code`) is on `PATH`, runs `code chat -m <agent-name> <prompt>`. This is the native agent runner — it resolves the agent by name and handles tool execution internally.
-   - **Fallback — `gh copilot`**: If `code` is not available, loads the agent's `.agent.md` instructions, prepends them to the prompt, and sends everything through `gh copilot --allow-all --output-format json`. This is a manual simulation of agent behavior.
-   - Without an agent, `gh copilot` is used directly for freeform chat.
-4. CLI output streams back in 100ms chunks. Tool-call markers (`\x00TOOL:`) are detected and sent as separate events.
+3. The backend runs `copilot --output-format json --allow-all --agent <agent-name> -p <prompt>`. If an agent is specified, it's passed via `--agent`; otherwise no agent flag is set (freeform chat).
+4. The CLI outputs structured JSONL events. The backend parses `assistant.message_delta` (text chunks), `tool.execution_start` (tool calls), `assistant.turn_start` (turn boundaries), `session.error` (errors), and `result` (completion). Tool events are forwarded to the client as separate messages.
 5. On completion, the raw output is parsed into structured `MessageContent` blocks (text, code, file references). Workspace files are synced to blob storage. The assistant message is saved to the session.
 
 ### Synchronous Chat
@@ -144,33 +141,34 @@ Telegram ──webhook──▶ /api/telegram/webhook ──▶ telegram_bot.py
 
 Commands like `/agent <name> <prompt>` trigger the same Copilot service. Responses are streamed by editing the Telegram message progressively. Per-chat history (in-memory, last 10 turns) provides conversation context.
 
-## Copilot CLI Strategy
+## Copilot CLI
 
-The backend uses two different CLI tools to talk to GitHub Copilot, with automatic fallback:
+All AI interactions go through the standalone `copilot` CLI (`@github/copilot` npm package) in non-interactive mode with structured JSONL output:
 
 ```
-run_code_chat(prompt, agent_name)
-        │
-        ├── `code` binary found?
-        │       │
-        │      YES ──▶ code chat -m <agent-name> <prompt>
-        │               (VS Code CLI — native agent runner, handles
-        │                tool execution and agent resolution internally)
-        │
-        └──── NO ──▶ run_with_agent(prompt, agent_name)
-                        │
-                        ├── Load .agent.md instructions from workspace
-                        ├── Prepend instructions to prompt
-                        └── gh copilot --allow-all --output-format json
-                            (or standalone `copilot` binary)
+copilot --output-format json --allow-all [--agent <agent>] [--model <model>] -p <prompt>
 ```
 
-| CLI | When used | How agents work |
-|-----|-----------|-----------------|
-| **`code chat`** | Preferred — when `code` is on `PATH` (e.g., in the Docker container with VS Code CLI installed) | Agent resolved by name via `-m <agent>`. Tool calls and instructions handled natively. |
-| **`gh copilot`** | Fallback — when `code` is not available | Agent `.agent.md` body loaded from disk, prepended to the user prompt manually. Tools managed via `--allow-all` flag. |
+| Flag | Purpose |
+|------|---------|
+| `--output-format json` | JSONL event stream (deltas, tool calls, errors) |
+| `--allow-all` | Enable all permissions (tools, paths, URLs) |
+| `--agent <agent>` | Use a custom agent (resolved by name from `.agent.md` files) |
+| `--model <model>` | Override AI model (e.g., `claude-opus-4.6-1m`) |
+| `--available-tools` | Restrict tools (used in plan mode for read-only: `read`, `search`, `web`) |
+| `-p <prompt>` | Non-interactive prompt (exits after completion) |
 
-Both CLIs stream stdout, which the backend reads in 100ms chunks. Tool-call markers (`\x00TOOL:name:description`) are detected inline and forwarded as separate events to the client.
+The `copilot` CLI discovers agents from `.github/agents/*.agent.md` files relative to the **git root** of the working directory. The workspace directory is initialized as a git repo at startup (via `ensure_workspace_dirs()` and in the Dockerfile) so agent discovery works correctly.
+
+The backend reads JSONL events from stdout and dispatches them:
+
+| Event type | Action |
+|-----------|--------|
+| `assistant.message_delta` | Yield text chunk to client |
+| `tool.execution_start` | Emit tool event marker (`\x00TOOL:name\|desc`) |
+| `assistant.turn_start` | Insert turn separator |
+| `session.error` | Yield error, kill process |
+| `result` | Process complete |
 
 ## Agents & Skills
 
@@ -226,7 +224,7 @@ The Copilot service maintains an in-memory activity log (last 500 entries) with 
 
 `update.sh` rebuilds the image in ACR and restarts the container app.
 
-The **Dockerfile** installs Python 3.12, the GitHub CLI with Copilot extensions, and mounts `/workspace` for agent/skill files.
+The **Dockerfile** installs Python 3.12, the standalone GitHub Copilot CLI (`@github/copilot` via npm), and mounts `/workspace` for agent/skill files.
 
 ## Environment Variables
 

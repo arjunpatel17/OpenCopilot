@@ -140,10 +140,7 @@ async def chat_stream(websocket: WebSocket):
 
             # Stream Copilot output
             full_output = []
-            if agent_name:
-                stream = copilot.run_code_chat(prompt, agent_name, model_name=model_name)
-            else:
-                stream = copilot.run_gh_copilot(prompt, model_name=model_name)
+            stream = copilot.run_code_chat(prompt, agent_name, model_name=model_name)
 
             async for chunk in stream:
                 # Detect structured tool event markers and send as separate message type

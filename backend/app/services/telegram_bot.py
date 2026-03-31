@@ -426,10 +426,8 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
 
         if mode == "plan":
             stream = copilot.run_plan_mode(prompt, agent_name, model_name=model_name, history=history_text)
-        elif agent_name:
-            stream = copilot.run_with_agent(prompt, agent_name, model_name=model_name, history=history_text)
         else:
-            stream = copilot.run_gh_copilot(prompt, model_name=model_name, history=history_text)
+            stream = copilot.run_code_chat(prompt, agent_name, model_name=model_name, history=history_text)
 
         logger.warning("Starting copilot stream (%s mode) for chat %s", mode, chat_id)
 
