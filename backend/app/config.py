@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     azure_speech_key: str = ""
     azure_speech_region: str = "eastus"
 
+    # Azure Communication Services (for cron job email notifications)
+    azure_comm_connection_string: str = ""
+    email_sender_address: str = ""
+
+    # Cron job API secret (shared with Azure Function timer)
+    cron_secret: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
     @property

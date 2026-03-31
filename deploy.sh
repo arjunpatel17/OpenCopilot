@@ -143,6 +143,128 @@ APP_URL=$(az containerapp show \
     --name "$CONTAINER_APP_NAME" \
     --query "properties.configuration.ingress.fqdn" -o tsv)
 
+# ---------- Step 8/10: Deploy Azure Function (cron timer) ----------
+echo ">>> Step 8/10: Deploying cron timer function..."
+FUNC_APP_NAME="opencopilot-cron"
+FUNC_STORAGE_NAME="opencopilotcronsa"
+CRON_SECRET=$(openssl rand -hex 16)
+
+# Create storage account for the function app
+az storage account create \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$FUNC_STORAGE_NAME" \
+    --location "$LOCATION" \
+    --sku Standard_LRS \
+    --output none
+
+# Create Function App (Consumption plan, Python 3.12)
+az functionapp create \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$FUNC_APP_NAME" \
+    --storage-account "$FUNC_STORAGE_NAME" \
+    --consumption-plan-location "$LOCATION" \
+    --runtime python \
+    --runtime-version 3.12 \
+    --functions-version 4 \
+    --os-type Linux \
+    --output none
+
+# Set function app settings
+az functionapp config appsettings set \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$FUNC_APP_NAME" \
+    --settings \
+        "CONTAINER_APP_URL=https://$APP_URL" \
+        "CRON_SECRET=$CRON_SECRET" \
+    --output none
+
+# Deploy function code
+pushd azure-function > /dev/null
+func azure functionapp publish "$FUNC_APP_NAME" --python 2>/dev/null || {
+    echo "    NOTE: Install Azure Functions Core Tools to auto-deploy the function."
+    echo "    Run: brew install azure-functions-core-tools@4"
+    echo "    Then: cd azure-function && func azure functionapp publish $FUNC_APP_NAME --python"
+}
+popd > /dev/null
+
+# Also set CRON_SECRET on the container app so it can verify requests
+az containerapp update \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CONTAINER_APP_NAME" \
+    --set-env-vars "CRON_SECRET=$CRON_SECRET" \
+    --output none
+
+echo "    Function App: $FUNC_APP_NAME"
+echo "    Cron Secret:  (auto-generated and set on both function + container app)"
+
+# ---------- Step 9/10: Create Azure Communication Services (email) ----------
+echo ">>> Step 9/10: Setting up email service..."
+COMM_NAME="opencopilot-comm"
+EMAIL_SVC_NAME="opencopilot-email"
+
+az communication create \
+    --name "$COMM_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location global \
+    --data-location unitedstates \
+    --output none
+
+az communication email create \
+    --name "$EMAIL_SVC_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location global \
+    --data-location unitedstates \
+    --output none 2>/dev/null
+
+az communication email domain create \
+    --domain-name AzureManagedDomain \
+    --email-service-name "$EMAIL_SVC_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location global \
+    --domain-management azuremanaged \
+    --output none 2>/dev/null
+
+# Link email domain to communication service
+DOMAIN_ID=$(az communication email domain show \
+    --domain-name AzureManagedDomain \
+    --email-service-name "$EMAIL_SVC_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query "id" -o tsv)
+
+az communication update \
+    --name "$COMM_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --linked-domains "$DOMAIN_ID" \
+    --output none
+
+# Get connection string and sender address
+COMM_CONN_STRING=$(az communication list-key \
+    --name "$COMM_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query "primaryConnectionString" -o tsv)
+
+EMAIL_DOMAIN=$(az communication email domain show \
+    --domain-name AzureManagedDomain \
+    --email-service-name "$EMAIL_SVC_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query "fromSenderDomain" -o tsv)
+
+EMAIL_SENDER="DoNotReply@${EMAIL_DOMAIN}"
+
+echo "    Email sender: $EMAIL_SENDER"
+
+# ---------- Step 10/10: Set email env vars on container app ----------
+echo ">>> Step 10/10: Configuring email on container app..."
+az containerapp update \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CONTAINER_APP_NAME" \
+    --set-env-vars \
+        "AZURE_COMM_CONNECTION_STRING=$COMM_CONN_STRING" \
+        "EMAIL_SENDER_ADDRESS=$EMAIL_SENDER" \
+    --output none
+
+echo "    Email configured on container app"
+
 echo ""
 echo "============================================"
 echo "  DEPLOYMENT COMPLETE!"
@@ -150,13 +272,13 @@ echo "============================================"
 echo ""
 echo "  App URL:  https://$APP_URL"
 echo ""
-echo "  Resource Group:    $RESOURCE_GROUP"
+echo "  Resource Group:     $RESOURCE_GROUP"
 echo "  Container Registry: $ACR_NAME"
-echo "  Storage Account:   $STORAGE_ACCOUNT_NAME"
+echo "  Storage Account:    $STORAGE_ACCOUNT_NAME"
+echo "  Function App:       $FUNC_APP_NAME"
+echo "  Email Sender:       $EMAIL_SENDER"
 echo ""
-echo "  To update after code changes:"
-echo "    az acr build --registry $ACR_NAME --image ${IMAGE_NAME}:latest --file Dockerfile ."
-echo "    az containerapp update --resource-group $RESOURCE_GROUP --name $CONTAINER_APP_NAME --image $ACR_NAME.azurecr.io/${IMAGE_NAME}:latest"
+echo "  To update after code changes:  ./update.sh"
 echo ""
 echo "  To tear down everything:"
 echo "    az group delete --name $RESOURCE_GROUP --yes --no-wait"

@@ -9,6 +9,7 @@ set -euo pipefail
 RESOURCE_GROUP="opencopilot-rg"
 CONTAINER_APP_NAME="opencopilot"
 IMAGE_NAME="opencopilot"
+FUNC_APP_NAME="opencopilot-cron"
 
 # Auto-detect ACR name from the running container app
 echo ">>> Detecting current deployment..."
@@ -30,7 +31,7 @@ echo "    Current Image: $CURRENT_IMAGE"
 echo ""
 
 # Step 1: Rebuild image in ACR
-echo ">>> Step 1/2: Building new image in ACR (this takes a few minutes)..."
+echo ">>> Step 1/3: Building new image in ACR (this takes a few minutes)..."
 az acr build \
     --registry "$ACR_NAME" \
     --image "${IMAGE_NAME}:latest" \
@@ -41,7 +42,7 @@ az acr build \
 echo "    Image built: $ACR_NAME.azurecr.io/${IMAGE_NAME}:latest"
 
 # Step 2: Update the container app to use the new image (force new revision)
-echo ">>> Step 2/2: Updating container app..."
+echo ">>> Step 2/3: Updating container app..."
 az containerapp update \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_APP_NAME" \
@@ -60,4 +61,21 @@ echo "============================================"
 echo "  UPDATE COMPLETE!"
 echo "============================================"
 echo "  App URL: https://$APP_URL"
+
+# Step 3: Update Azure Function (if it exists)
+FUNC_EXISTS=$(az functionapp show --resource-group "$RESOURCE_GROUP" --name "$FUNC_APP_NAME" --query "name" -o tsv 2>/dev/null || true)
+if [[ -n "$FUNC_EXISTS" ]]; then
+    echo ""
+    echo ">>> Step 3/3: Updating cron function..."
+    pushd azure-function > /dev/null
+    func azure functionapp publish "$FUNC_APP_NAME" --python 2>/dev/null || {
+        echo "    NOTE: func CLI not installed. To update the function manually:"
+        echo "    cd azure-function && func azure functionapp publish $FUNC_APP_NAME --python"
+    }
+    popd > /dev/null
+    echo "    Function App updated: $FUNC_APP_NAME"
+else
+    echo ""
+    echo "  (No cron function found — skipping. Run deploy.sh for initial setup.)"
+fi
 echo ""

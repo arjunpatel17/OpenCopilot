@@ -216,6 +216,42 @@ Add `--model <id>` to any message to use a specific model:
 | `/clear` | Clear conversation history for the current chat |
 | `/help` | Show the help menu |
 
+### Scheduled Jobs (Cron)
+
+Schedule recurring agent runs that email results automatically. Jobs survive container restarts (persisted in Azure Blob Storage) and are executed by an Azure Function timer.
+
+**Create a job:**
+```
+/cron <schedule> <agent> <prompt> --email <address>
+```
+
+**Schedule presets:** `every 1h`, `every 6h`, `daily`, `weekly`, `weekdays`
+
+**Examples:**
+```
+/cron daily stock-analysis AAPL at $242.50 --email me@company.com
+/cron every 6h real-estate-analysis 505 Regency Trl --email team@co.com
+/cron weekdays business-plan-analysis SaaS market update --email ceo@startup.com
+```
+
+**Manage jobs:**
+
+| Command | Description |
+|---------|-------------|
+| `/crons` | List your scheduled jobs (shows IDs) |
+| `/uncron <id>` | Delete a scheduled job |
+
+When a job runs, full results are emailed and a short ✅/❌ notification is sent to Telegram.
+
+**Prerequisites for cron:**
+- Azure Communication Services resource ([create one](https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/create-communication-resource))
+- Verified sender email domain
+- Set env vars on the container app:
+  ```
+  AZURE_COMM_CONNECTION_STRING=<your-connection-string>
+  EMAIL_SENDER_ADDRESS=DoNotReply@<your-domain>.azurecomm.net
+  ```
+
 ### File output
 
 When an agent generates files (reports, code, etc.), the bot sends a summary with **clickable links** to view each file directly. A link to the web file explorer is also included.
@@ -334,6 +370,8 @@ OpenCopilot/
 | `/api/telegram/webhook` | POST | Telegram webhook |
 | `/api/telegram/setup-webhook` | POST | Register webhook |
 | `/api/telegram/webhook` | DELETE | Remove webhook |
+| `/api/cron/due` | GET | List due cron jobs (requires `X-Cron-Secret`) |
+| `/api/cron/run/{job_id}` | POST | Execute a cron job (requires `X-Cron-Secret`) |
 
 ---
 

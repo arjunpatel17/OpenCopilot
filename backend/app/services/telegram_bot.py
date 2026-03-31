@@ -87,6 +87,11 @@ HELP_TEXT = (
     "`/agent <name> <prompt>` — Run an agent \\(full tools\\)\n"
     "`/plan <prompt>` — Plan mode \\(read\\-only, no edits\\)\n"
     "`/plan <agent> <prompt>` — Plan with an agent\n\n"
+    "*Scheduled Jobs:*\n"
+    "`/cron <schedule> <agent> <prompt> \\-\\-email <addr>` — Schedule a recurring agent run\n"
+    "`/crons` — List your scheduled jobs\n"
+    "`/uncron <id>` — Delete a scheduled job\n"
+    "Schedules: `every 1h`, `every 6h`, `daily`, `weekly`, `weekdays`\n\n"
     "*Introspection:*\n"
     "`/agents` — List available agents\n"
     "`/skills` — List available skills\n"
@@ -103,6 +108,7 @@ HELP_TEXT = (
     "• Hello, help me write a Python script\n"
     "• /agent stock\\-analysis\\-pro AAPL at \\$242\\.50\n"
     "• /plan Analyze the codebase and propose refactoring\n"
+    "• /cron daily stock\\-analysis AAPL \\-\\-email me@co\\.com\n"
     "• /mcps\n"
     "• /explain What does asyncio\\.gather do?\n\n"
     "*Model selection:*\n"
@@ -258,6 +264,145 @@ async def _handle_cmd_sync(bot: Bot, chat_id: int) -> None:
         await bot.send_message(chat_id=chat_id, text=f"❌ Sync failed: {e}")
 
 
+# ========== Cron job commands ==========
+
+EMAIL_FLAG_RE = re.compile(r'--email\s+(\S+)')
+
+SCHEDULE_KEYWORDS: dict[str, str] = {
+    "every": "",       # "every 1h", "every 6h"
+    "daily": "daily",
+    "weekly": "weekly",
+    "weekdays": "weekdays",
+}
+
+
+def _parse_cron_command(text: str) -> tuple[str | None, str | None, str | None, str | None, str | None]:
+    """Parse /cron <schedule> <agent> <prompt> --email <addr>.
+
+    Returns (schedule, agent_name, prompt, email, error).
+    """
+    from app.services.cron_store import ALL_SCHEDULES
+
+    # Extract --email flag
+    email_match = EMAIL_FLAG_RE.search(text)
+    if not email_match:
+        return None, None, None, None, "Missing --email flag. Usage: /cron <schedule> <agent> <prompt> --email user@example.com"
+    email = email_match.group(1)
+    text = EMAIL_FLAG_RE.sub("", text).strip()
+
+    # Remove /cron prefix
+    rest = text[len("/cron"):].strip()
+    if not rest:
+        return None, None, None, None, "Missing schedule. Usage: /cron <schedule> <agent> <prompt> --email user@example.com"
+
+    # Parse schedule (may be one or two words like "every 6h")
+    words = rest.split()
+    schedule = None
+    consumed = 0
+
+    if words[0] == "every" and len(words) > 1:
+        candidate = f"every {words[1]}"
+        if candidate in ALL_SCHEDULES:
+            schedule = candidate
+            consumed = 2
+    if schedule is None and words[0] in ALL_SCHEDULES:
+        schedule = words[0]
+        consumed = 1
+
+    if schedule is None:
+        presets = ", ".join(f"`{s}`" for s in sorted(ALL_SCHEDULES))
+        return None, None, None, None, f"Unknown schedule `{words[0]}`. Available: {presets}"
+
+    remaining = words[consumed:]
+    if len(remaining) < 2:
+        return None, None, None, None, "Missing agent name and/or prompt."
+
+    agent_name = remaining[0]
+    prompt = " ".join(remaining[1:])
+
+    # Basic email validation
+    if "@" not in email or "." not in email:
+        return None, None, None, None, f"Invalid email address: {email}"
+
+    return schedule, agent_name, prompt, email, None
+
+
+async def _handle_cmd_cron(bot: Bot, chat_id: int, text: str, model_name: str | None = None) -> None:
+    """Handle /cron command — create a scheduled job."""
+    from app.services import cron_store
+
+    schedule, agent_name, prompt, email, error = _parse_cron_command(text)
+    if error:
+        await bot.send_message(chat_id=chat_id, text=f"⚠️ {error}")
+        return
+
+    job = cron_store.add_job(
+        chat_id=chat_id,
+        agent_name=agent_name,
+        prompt=prompt,
+        schedule=schedule,
+        email=email,
+        model_name=model_name,
+    )
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"✅ Cron job created (ID: `{job.id}`)\n\n"
+            f"• Agent: `{job.agent_name}`\n"
+            f"• Schedule: `{job.schedule}`\n"
+            f"• Email: {job.email}\n"
+            f"• Prompt: {job.prompt[:100]}{'...' if len(job.prompt) > 100 else ''}\n\n"
+            f"Use /crons to list jobs, /uncron {job.id} to delete."
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def _handle_cmd_crons(bot: Bot, chat_id: int) -> None:
+    """Handle /crons command — list scheduled jobs for this chat."""
+    from app.services import cron_store
+    import datetime
+
+    jobs = cron_store.list_jobs(chat_id)
+    if not jobs:
+        await bot.send_message(chat_id=chat_id, text="No scheduled jobs. Create one with /cron.")
+        return
+
+    lines = ["📋 *Your Scheduled Jobs:*\n"]
+    for j in jobs:
+        last = "never"
+        if j.last_run:
+            dt = datetime.datetime.fromtimestamp(j.last_run, tz=datetime.timezone.utc)
+            last = dt.strftime("%Y-%m-%d %H:%M UTC")
+        status = "✅" if j.enabled else "⏸"
+        lines.append(
+            f"{status} `{j.id}` — `{j.agent_name}` ({j.schedule})\n"
+            f"   📧 {j.email} | Last run: {last}\n"
+            f"   Prompt: {j.prompt[:60]}{'...' if len(j.prompt) > 60 else ''}"
+        )
+
+    lines.append(f"\nDelete with: /uncron <id>")
+    await bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="Markdown")
+
+
+async def _handle_cmd_uncron(bot: Bot, chat_id: int, text: str) -> None:
+    """Handle /uncron <id> — delete a scheduled job."""
+    from app.services import cron_store
+
+    parts = text.split()
+    if len(parts) < 2:
+        await bot.send_message(chat_id=chat_id, text="Usage: /uncron <job_id>\nUse /crons to see your job IDs.")
+        return
+
+    job_id = parts[1]
+    removed = cron_store.remove_job(job_id, chat_id)
+    if removed:
+        await bot.send_message(chat_id=chat_id, text=f"✅ Cron job `{job_id}` deleted.", parse_mode="Markdown")
+    else:
+        await bot.send_message(chat_id=chat_id, text=f"⚠️ Job `{job_id}` not found. Use /crons to see your jobs.", parse_mode="Markdown")
+
+
 # ========== Main message handler ==========
 
 async def handle_telegram_message(update_data: dict) -> None:
@@ -345,6 +490,17 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
         return
     if cmd == "/models":
         await _handle_cmd_models(bot, chat_id)
+        return
+
+    # Cron job commands
+    if cmd == "/cron":
+        await _handle_cmd_cron(bot, chat_id, text, model_name=model_name)
+        return
+    if cmd == "/crons":
+        await _handle_cmd_crons(bot, chat_id)
+        return
+    if cmd == "/uncron":
+        await _handle_cmd_uncron(bot, chat_id, text)
         return
 
     # Determine mode & parse prompt
