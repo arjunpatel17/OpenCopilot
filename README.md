@@ -222,16 +222,19 @@ Schedule recurring agent runs that email results automatically. Jobs survive con
 
 **Create a job:**
 ```
-/cron <schedule> <agent> <prompt> --email <address>
+/cron <schedule> <agent> <prompt> --email <address> [--time HH:MM]
 ```
 
 **Schedule presets:** `every 1h`, `every 6h`, `daily`, `weekly`, `weekdays`
 
+The optional `--time HH:MM` flag sets a specific run time in UTC (24h format). Without it, jobs run on an interval basis from when they were created.
+
 **Examples:**
 ```
 /cron daily stock-analysis AAPL at $242.50 --email me@company.com
+/cron daily stock-analysis Look up MSFT price --email me@co.com --time 08:00
 /cron every 6h real-estate-analysis 505 Regency Trl --email team@co.com
-/cron weekdays business-plan-analysis SaaS market update --email ceo@startup.com
+/cron weekdays business-plan-analysis SaaS market update --email ceo@startup.com --time 09:00
 ```
 
 **Manage jobs:**

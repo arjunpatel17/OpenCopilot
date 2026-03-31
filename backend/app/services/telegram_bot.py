@@ -89,6 +89,7 @@ HELP_TEXT = (
     "`/plan <agent> <prompt>` — Plan with an agent\n\n"
     "*Scheduled Jobs:*\n"
     "`/cron <schedule> <agent> <prompt> \\-\\-email <addr>` — Schedule a recurring agent run\n"
+    "`/cron \.\.\. \\-\\-time HH:MM` — Set a specific run time \(UTC\)\n"
     "`/crons` — List your scheduled jobs\n"
     "`/uncron <id>` — Delete a scheduled job\n"
     "Schedules: `every 1h`, `every 6h`, `daily`, `weekly`, `weekdays`\n\n"
@@ -109,6 +110,7 @@ HELP_TEXT = (
     "• /agent stock\\-analysis\\-pro AAPL at \\$242\\.50\n"
     "• /plan Analyze the codebase and propose refactoring\n"
     "• /cron daily stock\\-analysis AAPL \\-\\-email me@co\\.com\n"
+    "• /cron daily stock\\-analysis AAPL \\-\\-email me@co\\.com \\-\\-time 08:00\n"
     "• /mcps\n"
     "• /explain What does asyncio\\.gather do?\n\n"
     "*Model selection:*\n"
@@ -267,6 +269,7 @@ async def _handle_cmd_sync(bot: Bot, chat_id: int) -> None:
 # ========== Cron job commands ==========
 
 EMAIL_FLAG_RE = re.compile(r'--email\s+(\S+)')
+TIME_FLAG_RE = re.compile(r'--time\s+(\d{1,2}:\d{2})')
 
 SCHEDULE_KEYWORDS: dict[str, str] = {
     "every": "",       # "every 1h", "every 6h"
@@ -276,19 +279,34 @@ SCHEDULE_KEYWORDS: dict[str, str] = {
 }
 
 
-def _parse_cron_command(text: str) -> tuple[str | None, str | None, str | None, str | None, str | None]:
-    """Parse /cron <schedule> <agent> <prompt> --email <addr>.
+def _parse_cron_command(text: str) -> tuple[str | None, str | None, str | None, str | None, str | None, str | None]:
+    """Parse /cron <schedule> <agent> <prompt> --email <addr> [--time HH:MM].
 
-    Returns (schedule, agent_name, prompt, email, error).
+    Returns (schedule, agent_name, prompt, email, run_at, error).
     """
     from app.services.cron_store import ALL_SCHEDULES
 
     # Extract --email flag
     email_match = EMAIL_FLAG_RE.search(text)
     if not email_match:
-        return None, None, None, None, "Missing --email flag. Usage: /cron <schedule> <agent> <prompt> --email user@example.com"
+        return None, None, None, None, None, "Missing --email flag. Usage: /cron <schedule> <agent> <prompt> --email user@example.com"
     email = email_match.group(1)
     text = EMAIL_FLAG_RE.sub("", text).strip()
+
+    # Extract --time flag (optional)
+    run_at = None
+    time_match = TIME_FLAG_RE.search(text)
+    if time_match:
+        run_at = time_match.group(1)
+        # Validate HH:MM format
+        try:
+            h, m = map(int, run_at.split(":"))
+            if not (0 <= h <= 23 and 0 <= m <= 59):
+                return None, None, None, None, None, f"Invalid time: {run_at}. Use HH:MM in 24h UTC format (e.g., 08:00, 14:30)."
+            run_at = f"{h:02d}:{m:02d}"  # Normalize
+        except ValueError:
+            return None, None, None, None, None, f"Invalid time: {run_at}. Use HH:MM format."
+        text = TIME_FLAG_RE.sub("", text).strip()
 
     # Remove /cron prefix
     rest = text[len("/cron"):].strip()
@@ -311,27 +329,27 @@ def _parse_cron_command(text: str) -> tuple[str | None, str | None, str | None, 
 
     if schedule is None:
         presets = ", ".join(f"`{s}`" for s in sorted(ALL_SCHEDULES))
-        return None, None, None, None, f"Unknown schedule `{words[0]}`. Available: {presets}"
+        return None, None, None, None, None, f"Unknown schedule `{words[0]}`. Available: {presets}"
 
     remaining = words[consumed:]
     if len(remaining) < 2:
-        return None, None, None, None, "Missing agent name and/or prompt."
+        return None, None, None, None, None, "Missing agent name and/or prompt."
 
     agent_name = remaining[0]
     prompt = " ".join(remaining[1:])
 
     # Basic email validation
     if "@" not in email or "." not in email:
-        return None, None, None, None, f"Invalid email address: {email}"
+        return None, None, None, None, None, f"Invalid email address: {email}"
 
-    return schedule, agent_name, prompt, email, None
+    return schedule, agent_name, prompt, email, run_at, None
 
 
 async def _handle_cmd_cron(bot: Bot, chat_id: int, text: str, model_name: str | None = None) -> None:
     """Handle /cron command — create a scheduled job."""
     from app.services import cron_store
 
-    schedule, agent_name, prompt, email, error = _parse_cron_command(text)
+    schedule, agent_name, prompt, email, run_at, error = _parse_cron_command(text)
     if error:
         await bot.send_message(chat_id=chat_id, text=f"⚠️ {error}")
         return
@@ -343,14 +361,16 @@ async def _handle_cmd_cron(bot: Bot, chat_id: int, text: str, model_name: str | 
         schedule=schedule,
         email=email,
         model_name=model_name,
+        run_at=run_at,
     )
 
+    time_info = f"\n• Time: `{job.run_at}` UTC" if job.run_at else ""
     await bot.send_message(
         chat_id=chat_id,
         text=(
             f"✅ Cron job created (ID: `{job.id}`)\n\n"
             f"• Agent: `{job.agent_name}`\n"
-            f"• Schedule: `{job.schedule}`\n"
+            f"• Schedule: `{job.schedule}`{time_info}\n"
             f"• Email: {job.email}\n"
             f"• Prompt: {job.prompt[:100]}{'...' if len(job.prompt) > 100 else ''}\n\n"
             f"Use /crons to list jobs, /uncron {job.id} to delete."

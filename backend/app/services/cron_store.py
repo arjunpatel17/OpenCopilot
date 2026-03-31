@@ -1,5 +1,6 @@
 """Cron job storage — CRUD with Azure Blob Storage persistence."""
 
+import datetime
 import json
 import logging
 import secrets
@@ -36,6 +37,7 @@ class CronJob:
     created_at: float = field(default_factory=time.time)
     enabled: bool = True
     last_run: float | None = None
+    run_at: str | None = None  # Optional time like "08:00" (UTC)
 
 
 def _generate_id() -> str:
@@ -65,6 +67,7 @@ def add_job(
     schedule: str,
     email: str,
     model_name: str | None = None,
+    run_at: str | None = None,
 ) -> CronJob:
     jobs = _load_jobs()
     job = CronJob(
@@ -75,6 +78,7 @@ def add_job(
         schedule=schedule,
         email=email,
         model_name=model_name,
+        run_at=run_at,
     )
     jobs.append(job)
     _save_jobs(jobs)
@@ -122,20 +126,34 @@ def is_job_due(job: CronJob) -> bool:
         return False
 
     now = time.time()
+    now_dt = datetime.datetime.now(datetime.timezone.utc)
 
     # Weekday check: only run Mon-Fri
     if job.schedule == "weekdays":
-        import datetime
-        weekday = datetime.datetime.now(datetime.timezone.utc).weekday()
-        if weekday >= 5:  # Saturday=5, Sunday=6
+        if now_dt.weekday() >= 5:  # Saturday=5, Sunday=6
             return False
-        interval = 86400  # once per day
+        interval = 86400
     else:
         interval = SCHEDULE_PRESETS.get(job.schedule)
         if interval is None:
             return False
 
+    # If a specific time is set, check we're within the 5-min polling window
+    if job.run_at:
+        try:
+            target_hour, target_minute = map(int, job.run_at.split(":"))
+        except (ValueError, AttributeError):
+            return False
+        # Only fire if current UTC time is within 5 minutes after the target
+        target_minutes = target_hour * 60 + target_minute
+        current_minutes = now_dt.hour * 60 + now_dt.minute
+        diff = current_minutes - target_minutes
+        if diff < 0 or diff >= 5:
+            return False
+
     if job.last_run is None:
+        # For time-based jobs, only fire if we're in the window (checked above)
         return True
 
-    return (now - job.last_run) >= interval
+    # Prevent double-fire: require at least 90% of the interval to have passed
+    return (now - job.last_run) >= (interval * 0.9)
