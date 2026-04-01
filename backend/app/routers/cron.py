@@ -1,5 +1,6 @@
 """Cron job API — endpoints called by the Azure Function timer to execute due jobs."""
 
+import hmac
 import logging
 from fastapi import APIRouter, Header, HTTPException
 from app.config import settings
@@ -12,7 +13,7 @@ router = APIRouter(prefix="/api/cron", tags=["cron"])
 
 
 def _verify_secret(x_cron_secret: str = Header(...)) -> None:
-    if not settings.cron_secret or x_cron_secret != settings.cron_secret:
+    if not settings.cron_secret or not hmac.compare_digest(x_cron_secret, settings.cron_secret):
         raise HTTPException(status_code=403, detail="Invalid cron secret")
 
 

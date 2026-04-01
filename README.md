@@ -2,6 +2,12 @@
 
 Run GitHub Copilot agents and commands from a Telegram bot or API — deployed on Azure. The web dashboard provides a file explorer and real-time process log viewer.
 
+> **⚠️ Security Notice**
+> - **Authentication is disabled by default** (`AUTH_ENABLED=false`). Enable it before exposing to the internet by setting `AUTH_ENABLED=true` and configuring Azure Entra ID credentials.
+> - **CORS**: The default `.env.example` allows only `localhost`. Update `CORS_ORIGINS` to your actual domain in production.
+> - **`--allow-all` flag**: The Copilot CLI runs with `--allow-all`, granting unrestricted tool access (shell, file writes). Do not expose to untrusted users.
+> - **Telegram setup**: Pass `APP_URL` as an environment variable: `APP_URL=https://your-app-url ./setup-telegram.sh`
+
 ---
 
 ## Prerequisites

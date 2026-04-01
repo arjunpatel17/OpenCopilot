@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import logging
 from fastapi import APIRouter, Request, Depends, HTTPException
 from app.auth import get_current_user
@@ -19,7 +20,7 @@ async def telegram_webhook(request: Request):
     # Verify webhook secret if configured
     if settings.telegram_webhook_secret:
         secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-        if secret != settings.telegram_webhook_secret:
+        if not hmac.compare_digest(secret, settings.telegram_webhook_secret):
             raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
     update_data = await request.json()

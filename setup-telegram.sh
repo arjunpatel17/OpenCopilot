@@ -9,15 +9,16 @@ set -euo pipefail
 
 # ---------- Configuration ----------
 # Update APP_URL after running deploy.sh (it prints the URL)
-APP_URL="https://opencopilot.greenmushroom-ffce0184.eastus.azurecontainerapps.io"
+APP_URL="${APP_URL:-}"
 RESOURCE_GROUP="opencopilot-rg"
 CONTAINER_APP="opencopilot"
 ENV_FILE="$(dirname "$0")/backend/.env"
 WEBHOOK_SECRET="opencopilot-$(openssl rand -hex 8)"
 
 if [[ -z "$APP_URL" ]]; then
-    echo "ERROR: Set APP_URL at the top of this script to your Azure Container App URL."
-    echo "       Run deploy.sh first, then paste the URL here."
+    echo "ERROR: APP_URL is not set. Pass it as an environment variable:"
+    echo "       APP_URL=https://your-app.eastus.azurecontainerapps.io ./setup-telegram.sh"
+    echo "       Run deploy.sh first to get your URL."
     exit 1
 fi
 
