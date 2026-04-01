@@ -47,7 +47,14 @@ ENV WORKSPACE_DIR=/workspace
 ENV AGENTS_DIR=.github/agents
 ENV SKILLS_DIR=.github/skills
 
+# Create non-root user and set ownership
+RUN useradd -m -s /bin/bash appuser && \
+    chown -R appuser:appuser /workspace /app
+
 EXPOSE 8000
+
+# Run as non-root user
+USER appuser
 
 # Run from the backend directory so imports work
 WORKDIR /app/backend

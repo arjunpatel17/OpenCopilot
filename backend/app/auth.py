@@ -1,8 +1,8 @@
-from fastapi import Depends, HTTPException, status
+import time
+from fastapi import Depends, HTTPException, WebSocket, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 import httpx
-from functools import lru_cache
 from app.config import settings
 
 security = HTTPBearer(auto_error=False)
@@ -11,11 +11,21 @@ JWKS_URL = f"https://login.microsoftonline.com/{settings.azure_tenant_id}/discov
 ISSUER = f"https://login.microsoftonline.com/{settings.azure_tenant_id}/v2.0"
 
 
-@lru_cache(maxsize=1)
+# JWKS cache with TTL (refresh every 6 hours instead of caching forever)
+_jwks_cache: dict | None = None
+_jwks_cache_time: float = 0
+_JWKS_TTL = 6 * 3600
+
+
 def _get_jwks() -> dict:
-    resp = httpx.get(JWKS_URL, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+    global _jwks_cache, _jwks_cache_time
+    now = time.monotonic()
+    if _jwks_cache is None or (now - _jwks_cache_time) > _JWKS_TTL:
+        resp = httpx.get(JWKS_URL, timeout=10)
+        resp.raise_for_status()
+        _jwks_cache = resp.json()
+        _jwks_cache_time = now
+    return _jwks_cache
 
 
 def _decode_token(token: str) -> dict:
@@ -53,8 +63,27 @@ async def get_current_user(
     try:
         payload = _decode_token(credentials.credentials)
         return payload
-    except JWTError as e:
+    except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {e}",
+            detail="Invalid or expired token",
         )
+
+
+async def verify_ws_token(websocket: WebSocket) -> dict | None:
+    """Verify authentication for WebSocket connections via query parameter.
+
+    Returns user dict on success, None if auth fails.
+    When auth is disabled, returns a local-dev user.
+    """
+    if not settings.auth_enabled:
+        return {"sub": "local-dev", "name": "Developer"}
+
+    token = websocket.query_params.get("token")
+    if not token:
+        return None
+
+    try:
+        return _decode_token(token)
+    except JWTError:
+        return None

@@ -2,7 +2,7 @@ import json
 import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
-from app.auth import get_current_user
+from app.auth import get_current_user, verify_ws_token
 from app.models.chat import (
     ChatRequest, ChatMessage, ChatSessionSummary, ChatSession,
     MessageRole, MessageContent, MessageContentType,
@@ -13,6 +13,7 @@ from app.services.copilot import TOOL_EVENT_PREFIX
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 AGENT_SLASH_RE = re.compile(r"^/(\S+)\s*(.*)", re.DOTALL)
+AGENT_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$")
 
 # Commands that should not be treated as agent names
 RESERVED_COMMANDS = {"models", "help", "version", "agents", "skills", "mcps", "files", "plan", "explain", "suggest", "sync"}
@@ -22,7 +23,9 @@ def _parse_user_input(message: str) -> tuple[str | None, str]:
     """Parse slash commands like /stock-analysis-pro AAPL at $242.50."""
     match = AGENT_SLASH_RE.match(message)
     if match and match.group(1).lower() not in RESERVED_COMMANDS:
-        return match.group(1), match.group(2).strip()
+        agent_name = match.group(1)
+        if AGENT_NAME_RE.match(agent_name):
+            return agent_name, match.group(2).strip()
     return None, message
 
 
@@ -91,6 +94,10 @@ async def chat_sync(request: ChatRequest, user: dict = Depends(get_current_user)
 @router.websocket("/stream")
 async def chat_stream(websocket: WebSocket):
     """WebSocket endpoint for streaming chat responses."""
+    user = await verify_ws_token(websocket)
+    if user is None:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
     await websocket.accept()
 
     try:

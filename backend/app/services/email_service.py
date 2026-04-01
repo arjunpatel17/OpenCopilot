@@ -1,13 +1,20 @@
 """Email service using Azure Communication Services."""
 
 import logging
+import re
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+
 
 def send_result_email(to: str, subject: str, body: str) -> bool:
     """Send an email with cron job results. Returns True on success."""
+    if not _EMAIL_RE.match(to):
+        logger.warning("Invalid email address rejected: %s", to)
+        return False
+
     if not settings.azure_comm_connection_string:
         logger.warning("AZURE_COMM_CONNECTION_STRING not set, skipping email to %s", to)
         return False

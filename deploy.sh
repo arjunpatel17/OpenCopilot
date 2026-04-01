@@ -64,6 +64,7 @@ az storage account create \
     --name "$STORAGE_ACCOUNT_NAME" \
     --location "$LOCATION" \
     --sku Standard_LRS \
+    --min-tls-version TLS1_2 \
     --output none
 
 STORAGE_CONNECTION_STRING=$(az storage account show-connection-string \
@@ -112,8 +113,7 @@ az containerapp create \
         "AZURE_STORAGE_CONNECTION_STRING=secretref:storage-conn" \
         "AZURE_STORAGE_CONTAINER=$STORAGE_CONTAINER" \
         "WORKSPACE_DIR=/workspace" \
-        "AUTH_ENABLED=false" \
-        "CORS_ORIGINS=[\"*\"]" \
+        "AUTH_ENABLED=true" \
     --secrets \
         "gh-token=$GH_TOKEN" \
         "storage-conn=$STORAGE_CONNECTION_STRING" \
@@ -155,6 +155,7 @@ az storage account create \
     --name "$FUNC_STORAGE_NAME" \
     --location "$LOCATION" \
     --sku Standard_LRS \
+    --min-tls-version TLS1_2 \
     --output none
 
 # Create Function App (Consumption plan, Python 3.12)
@@ -167,6 +168,7 @@ az functionapp create \
     --runtime-version 3.12 \
     --functions-version 4 \
     --os-type Linux \
+    --https-only true \
     --output none
 
 # Set function app settings
@@ -188,10 +190,16 @@ func azure functionapp publish "$FUNC_APP_NAME" --python 2>/dev/null || {
 popd > /dev/null
 
 # Also set CRON_SECRET on the container app so it can verify requests
+az containerapp secret set \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CONTAINER_APP_NAME" \
+    --secrets "cron-secret=$CRON_SECRET" \
+    --output none
+
 az containerapp update \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_APP_NAME" \
-    --set-env-vars "CRON_SECRET=$CRON_SECRET" \
+    --set-env-vars "CRON_SECRET=secretref:cron-secret" \
     --output none
 
 echo "    Function App: $FUNC_APP_NAME"
@@ -255,11 +263,17 @@ echo "    Email sender: $EMAIL_SENDER"
 
 # ---------- Step 10/10: Set email env vars on container app ----------
 echo ">>> Step 10/10: Configuring email on container app..."
+az containerapp secret set \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CONTAINER_APP_NAME" \
+    --secrets "comm-conn=$COMM_CONN_STRING" \
+    --output none
+
 az containerapp update \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_APP_NAME" \
     --set-env-vars \
-        "AZURE_COMM_CONNECTION_STRING=$COMM_CONN_STRING" \
+        "AZURE_COMM_CONNECTION_STRING=secretref:comm-conn" \
         "EMAIL_SENDER_ADDRESS=$EMAIL_SENDER" \
     --output none
 

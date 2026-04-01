@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     skills_dir: str = ".github/skills"
 
     # CORS
-    cors_origins: list[str] = ["*"]
+    cors_origins: list[str] = []
 
     # Copilot model (empty string = use CLI default)
     copilot_model: str = "claude-opus-4.6-1m"
