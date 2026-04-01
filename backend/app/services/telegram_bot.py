@@ -87,6 +87,9 @@ HELP_TEXT = (
     "`/agent <name> <prompt>` — Run an agent \\(full tools\\)\n"
     "`/plan <prompt>` — Plan mode \\(read\\-only, no edits\\)\n"
     "`/plan <agent> <prompt>` — Plan with an agent\n\n"
+    "*Email Reports:*\n"
+    "Add `\\-\\-email <addr>` to any agent/plan command to email the full report:\n"
+    "`/agent stock\\-analysis AAPL \\-\\-email me@co\\.com`\n\n"
     "*Scheduled Jobs:*\n"
     "`/cron <schedule> <agent> <prompt> \\-\\-email <addr>` — Schedule a recurring agent run\n"
     "`/cron \.\.\. \\-\\-time HH:MM` — Set a specific run time \(UTC\)\n"
@@ -474,6 +477,13 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
     if not text:
         return
 
+    # ---- Extract --email flag if present ----
+    email_addr = None
+    email_match = EMAIL_FLAG_RE.search(text)
+    if email_match:
+        email_addr = email_match.group(1)
+        text = EMAIL_FLAG_RE.sub('', text).strip()
+
     # ---- Extract --model flag if present ----
     model_name = None
     model_match = MODEL_FLAG_RE.search(text)
@@ -581,6 +591,8 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
 
     # Snapshot existing workspace files before the run
     existing_files = _snapshot_workspace_files()
+
+    full_response = ""
 
     # Stream output from Copilot — edit a single message in-place
     try:
@@ -709,6 +721,12 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
     current_files = _snapshot_workspace_files()
     new_files = sorted(current_files - existing_files)
 
+    # Send email report if --email was specified
+    if email_addr:
+        await _send_email_report(
+            bot, chat_id, email_addr, agent_name, prompt, full_response, new_files
+        )
+
     # Notify about generated files
     if new_files:
         # Derive app base URL from webhook info
@@ -753,6 +771,62 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
                 chat_id=chat_id,
                 text=f"📁 {len(new_files)} file(s) were generated.",
             )
+
+
+async def _send_email_report(
+    bot: Bot,
+    chat_id: int,
+    email: str,
+    agent_name: str | None,
+    prompt: str,
+    output: str,
+    new_files: list[str],
+) -> None:
+    """Build and send an email report for a Telegram agent run, similar to cron job emails."""
+    from app.services import email_service
+
+    workspace = Path(settings.workspace_dir)
+    label = agent_name or "chat"
+
+    subject = f"[OpenCopilot] {label} — Telegram report"
+    parts = [
+        f"Agent run '{label}' completed via Telegram.\n",
+        f"Prompt: {prompt}\n",
+        f"{'=' * 60}\n",
+        output,
+    ]
+
+    # Include content of any newly generated files
+    if new_files:
+        generated_files: dict[str, str] = {}
+        for rel_path in new_files:
+            fp = workspace / rel_path
+            try:
+                generated_files[rel_path] = fp.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                generated_files[rel_path] = "(binary file)"
+
+        parts.append(f"\n\n{'=' * 60}")
+        parts.append(f"\nGENERATED FILES ({len(generated_files)}):\n")
+        for path, content in generated_files.items():
+            parts.append(f"\n{'─' * 40}")
+            parts.append(f"📄 {path}")
+            parts.append(f"{'─' * 40}\n")
+            parts.append(content)
+
+    body = "\n".join(parts)
+    sent = email_service.send_result_email(email, subject, body)
+
+    if sent:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"📧 Report emailed to {email}.",
+        )
+    else:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"⚠️ Failed to email report to {email}. Check server logs.",
+        )
 
 
 def _snapshot_workspace_files() -> set[str]:
