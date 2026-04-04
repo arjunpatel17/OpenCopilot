@@ -289,6 +289,9 @@ def _parse_cron_command(text: str) -> tuple[str | None, str | None, str | None, 
     """
     from app.services.cron_store import ALL_SCHEDULES
 
+    # Normalize em/en dashes to double hyphens (Telegram clients often auto-convert -- to —)
+    text = text.replace("—", "--").replace("–", "--")
+
     # Extract --email flag
     email_match = EMAIL_FLAG_RE.search(text)
     if not email_match:
@@ -476,6 +479,9 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
 
     if not text:
         return
+
+    # Normalize em/en dashes to double hyphens (Telegram clients often auto-convert -- to —)
+    text = text.replace("—", "--").replace("–", "--")
 
     # ---- Extract --email flag if present ----
     email_addr = None
