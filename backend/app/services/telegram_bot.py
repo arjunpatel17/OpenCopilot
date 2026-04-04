@@ -483,6 +483,18 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
     # Normalize em/en dashes to double hyphens (Telegram clients often auto-convert -- to —)
     text = text.replace("—", "--").replace("–", "--")
 
+    # ---- Dispatch /cron early (before global --email extraction, since cron parses its own flags) ----
+    cmd = text.split()[0].lower() if text.startswith("/") else None
+
+    if cmd == "/cron":
+        # Extract --model flag if present
+        model_name = None
+        model_match = MODEL_FLAG_RE.search(text)
+        if model_match:
+            model_name = model_match.group(1)
+        await _handle_cmd_cron(bot, chat_id, text, model_name=model_name)
+        return
+
     # ---- Extract --email flag if present ----
     email_addr = None
     email_match = EMAIL_FLAG_RE.search(text)
@@ -528,10 +540,7 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
         await _handle_cmd_models(bot, chat_id)
         return
 
-    # Cron job commands
-    if cmd == "/cron":
-        await _handle_cmd_cron(bot, chat_id, text, model_name=model_name)
-        return
+    # Cron job commands (note: /cron is dispatched earlier, before --email extraction)
     if cmd == "/crons":
         await _handle_cmd_crons(bot, chat_id)
         return
