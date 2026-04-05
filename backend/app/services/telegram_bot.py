@@ -155,7 +155,9 @@ async def _handle_cmd_agents(bot: Bot, chat_id: int) -> None:
         skills_info = f" ({a.skills_count} skills)" if a.skills_count else ""
         lines.append(f"• `{a.name}`{desc}{skills_info}")
     lines.append(f"\nUse: /agent <name> <prompt>")
-    await bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="Markdown")
+    text = "\n".join(lines)
+    for chunk in _split_message(text):
+        await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
 
 
 async def _handle_cmd_skills(bot: Bot, chat_id: int) -> None:
@@ -180,7 +182,9 @@ async def _handle_cmd_skills(bot: Bot, chat_id: int) -> None:
     for name, desc in skills:
         desc_text = f" — {desc}" if desc else ""
         lines.append(f"• `{name}`{desc_text}")
-    await bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="Markdown")
+    text = "\n".join(lines)
+    for chunk in _split_message(text):
+        await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
 
 
 async def _handle_cmd_mcps(bot: Bot, chat_id: int) -> None:
