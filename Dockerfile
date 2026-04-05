@@ -46,6 +46,7 @@ COPY workspace/tools/ /workspace/tools/
 # Install tool dependencies if present
 RUN if [ -f /workspace/tools/job-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/job-scanner/requirements.txt; fi
 RUN if [ -f /workspace/tools/news-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/news-scanner/requirements.txt; fi
+RUN if [ -f /workspace/tools/sleeper-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/sleeper-scanner/requirements.txt; fi
 
 # gh auth: at runtime, GH_TOKEN env var will authenticate automatically
 ENV WORKSPACE_DIR=/workspace
