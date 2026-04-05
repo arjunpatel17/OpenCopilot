@@ -30,7 +30,8 @@ echo ""
 
 # ---------- Step 0: Ensure submodules are initialized ----------
 echo ">>> Step 0: Initializing submodules..."
-git submodule update --init --recursive
+git submodule update --init --recursive 2>/dev/null || echo "    Submodule not available — deploying without workspace content"
+mkdir -p workspace/.github/agents workspace/.github/skills workspace/tools
 
 # ---------- Step 1: Create Resource Group ----------
 echo ">>> Step 1/7: Creating resource group..."

@@ -38,14 +38,14 @@ COPY backend/ ./backend/
 # Copy frontend
 COPY frontend/ ./frontend/
 
-# Copy agents and skills into workspace
+# Copy agents, skills, and tools into workspace (dirs may be empty if submodule not available)
 COPY workspace/.github/agents/ /workspace/.github/agents/
 COPY workspace/.github/skills/ /workspace/.github/skills/
-
-# Copy workspace tools and install their dependencies
 COPY workspace/tools/ /workspace/tools/
-RUN pip install --no-cache-dir -r /workspace/tools/job-scanner/requirements.txt
-RUN pip install --no-cache-dir -r /workspace/tools/news-scanner/requirements.txt
+
+# Install tool dependencies if present
+RUN if [ -f /workspace/tools/job-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/job-scanner/requirements.txt; fi
+RUN if [ -f /workspace/tools/news-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/news-scanner/requirements.txt; fi
 
 # gh auth: at runtime, GH_TOKEN env var will authenticate automatically
 ENV WORKSPACE_DIR=/workspace
