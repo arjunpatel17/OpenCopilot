@@ -45,6 +45,7 @@ COPY workspace/.github/skills/ /workspace/.github/skills/
 # Copy workspace tools and install their dependencies
 COPY workspace/tools/ /workspace/tools/
 RUN pip install --no-cache-dir -r /workspace/tools/job-scanner/requirements.txt
+RUN pip install --no-cache-dir -r /workspace/tools/news-scanner/requirements.txt
 
 # gh auth: at runtime, GH_TOKEN env var will authenticate automatically
 ENV WORKSPACE_DIR=/workspace
