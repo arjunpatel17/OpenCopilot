@@ -9,7 +9,6 @@ venv/
 dist/
 build/
 .DS_Store
-workspace/.storage/
 *.pem
 *.key
 *.sqlite
