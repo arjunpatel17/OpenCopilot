@@ -26,7 +26,7 @@ MAX_LOG_LINES = 500
 
 _activity_log: deque[dict] = deque(maxlen=MAX_LOG_LINES)
 _log_subscribers: list[asyncio.Queue] = []
-_active_process: dict | None = None  # tracks current running process info
+_active_processes: dict[str, dict] = {}  # tracks running processes by ID
 
 
 def _emit_log(entry: dict) -> None:
@@ -63,8 +63,11 @@ def get_log_snapshot() -> list[dict]:
 
 
 def get_active_process() -> dict | None:
-    """Return info about the currently running process, if any."""
-    return _active_process
+    """Return info about a currently running process, if any."""
+    if _active_processes:
+        # Return the most recently started one
+        return max(_active_processes.values(), key=lambda p: p.get("started", 0))
+    return None
 
 
 def _find_cli(name: str) -> str | None:
@@ -149,7 +152,6 @@ def _prepend_history(prompt: str, history: str | None) -> str:
 
 async def run_code_chat(prompt: str, agent_name: str | None = None, *, model_name: str | None = None, history: str | None = None) -> AsyncIterator[str]:
     """Run a prompt via the standalone `copilot` CLI with structured JSONL output."""
-    global _active_process
     prompt = _prepend_history(prompt, history)
     copilot_path = _find_cli("copilot")
     if not copilot_path:
@@ -166,15 +168,19 @@ async def run_code_chat(prompt: str, agent_name: str | None = None, *, model_nam
 
     # Truncate prompt for display
     display_prompt = prompt[:120] + ("..." if len(prompt) > 120 else "")
-    _active_process = {"prompt": display_prompt, "model": model, "started": time.time(), "status": "running"}
+    proc_id = f"code-{id(args)}-{time.time()}"
+    _active_processes[proc_id] = {"prompt": display_prompt, "model": model, "started": time.time(), "status": "running"}
     _emit_log({"type": "process_start", "prompt": display_prompt, "model": model})
+    logger.info("Copilot process starting", extra={"agent_name": agent_name, "model": model})
 
     try:
         async for chunk in _run_jsonl_stream(args):
             yield chunk
     finally:
-        _active_process = None
+        duration_ms = round((time.time() - _active_processes.get(proc_id, {}).get("started", time.time())) * 1000)
+        _active_processes.pop(proc_id, None)
         _emit_log({"type": "process_end"})
+        logger.info("Copilot process finished", extra={"agent_name": agent_name, "model": model, "duration_ms": duration_ms})
 
 
 # ========== Plan mode (read-only, no edits/shell) ==========
@@ -203,17 +209,20 @@ async def run_plan_mode(prompt: str, agent_name: str | None = None, *, model_nam
     args.extend(["-p", combined])
 
     # Track process for logs
-    global _active_process
     display_prompt = prompt[:120] + ("..." if len(prompt) > 120 else "")
-    _active_process = {"prompt": display_prompt, "model": model, "started": time.time(), "status": "running"}
+    proc_id = f"plan-{id(args)}-{time.time()}"
+    _active_processes[proc_id] = {"prompt": display_prompt, "model": model, "started": time.time(), "status": "running"}
     _emit_log({"type": "process_start", "prompt": display_prompt, "model": model})
+    logger.info("Copilot plan process starting", extra={"agent_name": agent_name, "model": model})
 
     try:
         async for chunk in _run_jsonl_stream(args):
             yield chunk
     finally:
-        _active_process = None
+        duration_ms = round((time.time() - _active_processes.get(proc_id, {}).get("started", time.time())) * 1000)
+        _active_processes.pop(proc_id, None)
         _emit_log({"type": "process_end"})
+        logger.info("Copilot plan process finished", extra={"agent_name": agent_name, "model": model, "duration_ms": duration_ms})
 
 
 # ========== Shared JSONL stream reader ==========

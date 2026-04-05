@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # Cron job API secret (shared with Azure Function timer)
     cron_secret: str = ""
 
+    # Logging
+    log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
     @property

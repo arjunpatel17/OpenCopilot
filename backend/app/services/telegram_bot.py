@@ -16,6 +16,21 @@ logger.setLevel(logging.DEBUG)
 AGENT_CMD_PREFIX = "/agent "
 MODEL_FLAG_RE = re.compile(r'--model\s+(\S+)')
 
+# ========== Per-chat concurrency locks ==========
+
+_chat_locks: dict[int, asyncio.Lock] = {}
+
+
+def _get_chat_lock(chat_id: int) -> asyncio.Lock:
+    """Get or create an asyncio.Lock for a Telegram chat.
+
+    Ensures only one copilot invocation runs per chat at a time.
+    """
+    if chat_id not in _chat_locks:
+        _chat_locks[chat_id] = asyncio.Lock()
+    return _chat_locks[chat_id]
+
+
 # ========== Chat history (in-memory, per Telegram chat_id) ==========
 
 MAX_HISTORY_TURNS = 10           # max user+assistant pairs to keep
@@ -436,7 +451,8 @@ async def handle_telegram_message(update_data: dict) -> None:
     try:
         await _handle_telegram_message_inner(update_data)
     except Exception:
-        logger.exception("Unhandled error in telegram handler")
+        logger.exception("Unhandled error in telegram handler",
+                         extra={"chat_id": update_data.get("message", {}).get("chat", {}).get("id")})
 
 
 async def _handle_telegram_message_inner(update_data: dict) -> None:
@@ -453,6 +469,25 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
         bot = Bot(settings.telegram_bot_token)
         await bot.send_message(chat_id=chat_id, text="⛔ You are not authorized to use this bot.")
         return
+
+    # Acquire per-chat lock so requests are processed one at a time
+    lock = _get_chat_lock(chat_id)
+    if lock.locked():
+        bot = Bot(settings.telegram_bot_token)
+        await bot.send_message(chat_id=chat_id, text="⏳ A command is already running. Your request is queued and will start when it finishes.")
+
+    async with lock:
+        await _handle_telegram_message_locked(update_data, chat_id)
+
+
+async def _handle_telegram_message_locked(update_data: dict, chat_id: int) -> None:
+    update = Update.de_json(update_data, Bot(settings.telegram_bot_token))
+
+    if not update or not update.message:
+        return
+
+    message = update.message
+    username = message.from_user.username if message.from_user else None
 
     bot = Bot(settings.telegram_bot_token)
 
@@ -632,7 +667,8 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
         else:
             stream = copilot.run_code_chat(prompt, agent_name, model_name=model_name, history=history_text)
 
-        logger.warning("Starting copilot stream (%s mode) for chat %s", mode, chat_id)
+        logger.warning("Starting copilot stream (%s mode) for chat %s", mode, chat_id,
+                       extra={"chat_id": chat_id, "agent_name": agent_name, "model": model_name})
 
         async for chunk in stream:
             # Convert tool event markers into readable lines
@@ -690,7 +726,8 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
                             pass  # edit fails if text hasn't changed
                     last_edit_time = now
 
-        logger.warning("Copilot stream ended for chat %s", chat_id)
+        logger.warning("Copilot stream ended for chat %s", chat_id,
+                       extra={"chat_id": chat_id})
 
         # Final edit with complete remaining text
         if response_text.strip():
@@ -722,7 +759,8 @@ async def _handle_telegram_message_inner(update_data: dict) -> None:
             _record_message(chat_id, "assistant", full_response[:2000])
 
     except Exception as e:
-        logger.exception("Copilot execution failed for chat %s", chat_id)
+        logger.exception("Copilot execution failed for chat %s", chat_id,
+                         extra={"chat_id": chat_id, "agent_name": agent_name})
         await bot.send_message(chat_id=chat_id, text=f"❌ Error: {e}")
     finally:
         stop_typing.set()
