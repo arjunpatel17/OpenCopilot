@@ -69,22 +69,25 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
     except Exception:
         logger.exception("Failed to sync workspace after cron job %s", job.id)
 
-    # Collect content of any new files created during the run
-    generated_files: dict[str, str] = {}
+    # Collect content of any new files created during the run as attachments
+    attachments: list[tuple[str, str | bytes]] = []
     if workspace.exists():
         after_files = {str(f.relative_to(workspace)) for f in workspace.rglob("*") if f.is_file()}
         new_files = after_files - before_files
         for rel_path in sorted(new_files):
             fp = workspace / rel_path
             try:
-                generated_files[rel_path] = fp.read_text(encoding="utf-8", errors="replace")
+                attachments.append((rel_path, fp.read_text(encoding="utf-8", errors="replace")))
             except Exception:
-                generated_files[rel_path] = "(binary file)"
+                try:
+                    attachments.append((rel_path, fp.read_bytes()))
+                except Exception:
+                    logger.warning("Could not read generated file for attachment: %s", rel_path)
 
     # Update last_run timestamp
     cron_store.update_last_run(job.id)
 
-    # Build email body with full report files included
+    # Build email body
     if error:
         subject = f"[OpenCopilot] Cron job failed: {job.agent_name}"
         body = f"Cron job '{job.agent_name}' (ID: {job.id}) failed.\n\nError: {error}\n\nPrompt: {job.prompt}"
@@ -96,17 +99,11 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
             f"{'=' * 60}\n",
             output,
         ]
-        if generated_files:
-            parts.append(f"\n\n{'=' * 60}")
-            parts.append(f"\nGENERATED FILES ({len(generated_files)}):\n")
-            for path, content in generated_files.items():
-                parts.append(f"\n{'─' * 40}")
-                parts.append(f"📄 {path}")
-                parts.append(f"{'─' * 40}\n")
-                parts.append(content)
+        if attachments:
+            parts.append(f"\n\n(See {len(attachments)} attached report file(s).)")
         body = "\n".join(parts)
 
-    email_sent = email_service.send_result_email(job.email, subject, body)
+    email_sent = email_service.send_result_email(job.email, subject, body, attachments=attachments)
 
     # Send short Telegram notification
     tg_status = await _notify_telegram(job, error=error)

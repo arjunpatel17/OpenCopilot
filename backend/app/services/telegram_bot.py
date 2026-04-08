@@ -853,26 +853,24 @@ async def _send_email_report(
         output,
     ]
 
-    # Include content of any newly generated files
+    # Collect generated files as email attachments
+    attachments: list[tuple[str, str | bytes]] = []
     if new_files:
-        generated_files: dict[str, str] = {}
         for rel_path in new_files:
             fp = workspace / rel_path
             try:
-                generated_files[rel_path] = fp.read_text(encoding="utf-8", errors="replace")
+                content = fp.read_text(encoding="utf-8", errors="replace")
+                attachments.append((rel_path, content))
             except Exception:
-                generated_files[rel_path] = "(binary file)"
+                try:
+                    attachments.append((rel_path, fp.read_bytes()))
+                except Exception:
+                    logger.warning("Could not read generated file for attachment: %s", rel_path)
 
-        parts.append(f"\n\n{'=' * 60}")
-        parts.append(f"\nGENERATED FILES ({len(generated_files)}):\n")
-        for path, content in generated_files.items():
-            parts.append(f"\n{'─' * 40}")
-            parts.append(f"📄 {path}")
-            parts.append(f"{'─' * 40}\n")
-            parts.append(content)
+        parts.append(f"\n\n(See {len(attachments)} attached report file(s).)")
 
     body = "\n".join(parts)
-    sent = email_service.send_result_email(email, subject, body)
+    sent = email_service.send_result_email(email, subject, body, attachments=attachments)
 
     if sent:
         await bot.send_message(
