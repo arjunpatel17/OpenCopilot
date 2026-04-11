@@ -96,6 +96,24 @@ The agent runs on a container in the cloud. You get the result on your phone. Th
 
 ### Why These Choices?
 
+**Why Copilot CLI over Claude Code?**
+
+This was the biggest architectural decision. Claude Code (Anthropic's CLI agent) is excellent — arguably the most capable single-model coding agent available. But for this project, Copilot CLI won on several axes:
+
+1. **Model flexibility** — Copilot CLI gives you access to multiple frontier models (Claude, GPT-4o, Gemini, o4-mini) through a single interface. You're not locked into one provider. If Claude Opus is best for deep analysis but GPT-4o is faster for simple lookups, you can pick per-agent or per-request with `--model`. Claude Code only runs Claude.
+
+2. **Cost structure** — If you already have a GitHub Copilot subscription (which most developers do), you get model access included. Claude Code requires a separate Anthropic API key and you pay per token. For a personal tool that runs scheduled jobs daily, those API costs add up. With Copilot, the marginal cost of running an agent is $0.
+
+3. **Agent and skill system** — Copilot's `.agent.md` and `.skill.md` files give you a declarative way to define agents with specific tools, skills, and behaviors. You can compose agents from reusable skill modules, restrict tool access per agent, and manage everything through simple markdown files. Claude Code has custom instructions but nothing as structured or composable.
+
+4. **Built-in tool infrastructure** — Web search, file I/O, shell execution, and sub-agent invocation are all built into the Copilot CLI. With Claude Code, you'd need to wire up MCP servers or custom tool integrations for equivalent functionality.
+
+5. **Structured output** — The `--output-format json` flag gives you a clean JSONL event stream (message deltas, tool calls, errors, results) that's trivial to parse and forward to Telegram or a WebSocket. This made real-time streaming straightforward without custom parsing of terminal escape codes.
+
+6. **GitHub ecosystem integration** — The CLI authenticates via `gh auth token`, which the deployment script already captures. No separate API key management, no token rotation headaches, no billing surprises.
+
+The trade-off is real: wrapping a CLI subprocess is inherently less elegant than a native API call. You're parsing JSONL from stdout, managing process lifecycles, and dealing with edge cases like zombie processes. But the benefits — multi-model access, zero incremental cost, and the full agent runtime — made it the clear winner for this use case.
+
 **Why wrap the CLI instead of calling the API directly?**
 
 The `copilot` CLI is the only way to get access to the full agent system — `.agent.md` files, skills, tool orchestration, MCP servers, multi-turn conversations. The API endpoints for Copilot models exist, but they don't give you the agent runtime. By wrapping the CLI, I get all of that for free: the agent discovers skills, decides which tools to invoke, reads and writes files, does web searches — all orchestrated by the CLI.
