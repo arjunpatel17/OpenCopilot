@@ -69,7 +69,7 @@ Here's the exact breakdown for a personal or small-team deployment:
 | Azure Communication Services | Email: $0.00025/email | **< $0.01** |
 | GitHub Copilot | Included with your existing subscription | **$0 incremental** |
 
-**Total: ~$5-8/month** for a system that's mostly idle. Compare that to running Claude Code agents via the API - a single 10-module stock analysis (with 30+ web searches and extensive reasoning) would cost $3-8 in API tokens per run. With Copilot, that same analysis costs $0 incremental because it's included in the subscription you're already paying for.
+**Total: ~$5-8/month** for a system that's mostly idle. Compare that to running Claude Code agents via the API - a single 10-module stock analysis (with 30+ web searches and extensive reasoning). With Copilot, that same analysis costs $0 incremental because it's included in the subscription you're already paying for.
 
 The key enabler is **scale-to-zero** on Azure Container Apps:
 
