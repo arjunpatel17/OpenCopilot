@@ -106,7 +106,7 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
     email_sent = email_service.send_result_email(job.email, subject, body, attachments=attachments)
 
     # Send short Telegram notification
-    tg_status = await _notify_telegram(job, error=error)
+    tg_status = await _notify_telegram(job, error=error, email_sent=email_sent)
 
     return {
         "status": "error" if error else "ok",
@@ -117,7 +117,9 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
     }
 
 
-async def _notify_telegram(job: cron_store.CronJob, error: str | None = None) -> bool:
+async def _notify_telegram(
+    job: cron_store.CronJob, error: str | None = None, email_sent: bool = True
+) -> bool:
     """Send a short notification to the Telegram chat that created this job."""
     if not settings.telegram_bot_token:
         return False
@@ -128,6 +130,8 @@ async def _notify_telegram(job: cron_store.CronJob, error: str | None = None) ->
 
         if error:
             text = f"❌ Cron job `{job.agent_name}` (ID: `{job.id}`) failed:\n{error[:200]}"
+        elif not email_sent:
+            text = f"⚠️ Cron job `{job.agent_name}` (ID: `{job.id}`) completed, but the email to {job.email} failed to send."
         else:
             text = f"✅ Cron job `{job.agent_name}` (ID: `{job.id}`) completed. Results emailed to {job.email}."
 
