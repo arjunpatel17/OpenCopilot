@@ -65,7 +65,7 @@ def add_job(
     agent_name: str,
     prompt: str,
     schedule: str,
-    email: str,
+    email: str | None = None,
     model_name: str | None = None,
     run_at: str | None = None,
 ) -> CronJob:

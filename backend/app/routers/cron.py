@@ -103,7 +103,9 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
             parts.append(f"\n\n(See {len(attachments)} attached report file(s).)")
         body = "\n".join(parts)
 
-    email_sent = email_service.send_result_email(job.email, subject, body, attachments=attachments)
+    email_sent = False
+    if job.email:
+        email_sent = email_service.send_result_email(job.email, subject, body, attachments=attachments)
 
     # Send short Telegram notification
     tg_status = await _notify_telegram(job, error=error, email_sent=email_sent)
@@ -130,6 +132,8 @@ async def _notify_telegram(
 
         if error:
             text = f"❌ Cron job `{job.agent_name}` (ID: `{job.id}`) failed:\n{error[:200]}"
+        elif not job.email:
+            text = f"✅ Cron job `{job.agent_name}` (ID: `{job.id}`) completed."
         elif not email_sent:
             text = f"⚠️ Cron job `{job.agent_name}` (ID: `{job.id}`) completed, but the email to {job.email} failed to send."
         else:

@@ -280,10 +280,10 @@ def sync_workspace_to_storage() -> int:
             continue
         rel = fp.relative_to(workspace)
         parts = rel.parts
-        # Skip hidden dirs (except .github), sessions, and __pycache__
+        # Skip hidden dirs (except .github), sessions, data, and __pycache__
         if any((p.startswith(".") and p != ".github") or p == "__pycache__" for p in parts):
             continue
-        if parts[0] == "sessions":
+        if parts[0] in ("sessions", "data"):
             continue
         rel_str = str(rel)
         ct = mimetypes.guess_type(fp.name)[0] or "application/octet-stream"

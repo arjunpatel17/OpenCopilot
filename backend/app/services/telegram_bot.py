@@ -106,7 +106,7 @@ HELP_TEXT = (
     "Add `\\-\\-email <addr>` to any agent/plan command to email the full report:\n"
     "`/agent stock\\-analysis AAPL \\-\\-email me@co\\.com`\n\n"
     "*Scheduled Jobs:*\n"
-    "`/cron <schedule> <agent> <prompt> \\-\\-email <addr>` — Schedule a recurring agent run\n"
+    "`/cron <schedule> <agent> <prompt> [\\-\\-email <addr>]` — Schedule a recurring agent run\n"
     "`/cron \.\.\. \\-\\-time HH:MM` — Set a specific run time \(UTC\)\n"
     "`/crons` — List your scheduled jobs\n"
     "`/uncron <id>` — Delete a scheduled job\n"
@@ -127,6 +127,7 @@ HELP_TEXT = (
     "• Hello, help me write a Python script\n"
     "• /agent stock\\-analysis\\-pro AAPL at \\$242\\.50\n"
     "• /plan Analyze the codebase and propose refactoring\n"
+    "• /cron daily stock\\-analysis AAPL\n"
     "• /cron daily stock\\-analysis AAPL \\-\\-email me@co\\.com\n"
     "• /cron daily stock\\-analysis AAPL \\-\\-email me@co\\.com \\-\\-time 08:00\n"
     "• /mcps\n"
@@ -311,12 +312,12 @@ def _parse_cron_command(text: str) -> tuple[str | None, str | None, str | None, 
     # Normalize em/en dashes to double hyphens (Telegram clients often auto-convert -- to —)
     text = text.replace("—", "--").replace("–", "--")
 
-    # Extract --email flag
+    # Extract --email flag (optional)
     email_match = EMAIL_FLAG_RE.search(text)
-    if not email_match:
-        return None, None, None, None, None, "Missing --email flag. Usage: /cron <schedule> <agent> <prompt> --email user@example.com"
-    email = email_match.group(1)
-    text = EMAIL_FLAG_RE.sub("", text).strip()
+    email = None
+    if email_match:
+        email = email_match.group(1)
+        text = EMAIL_FLAG_RE.sub("", text).strip()
 
     # Extract --time flag (optional)
     run_at = None
@@ -336,7 +337,7 @@ def _parse_cron_command(text: str) -> tuple[str | None, str | None, str | None, 
     # Remove /cron prefix
     rest = text[len("/cron"):].strip()
     if not rest:
-        return None, None, None, None, "Missing schedule. Usage: /cron <schedule> <agent> <prompt> --email user@example.com"
+        return None, None, None, None, None, "Missing schedule. Usage: /cron <schedule> <agent> <prompt> [--email user@example.com]"
 
     # Parse schedule (may be one or two words like "every 6h")
     words = rest.split()
@@ -363,8 +364,8 @@ def _parse_cron_command(text: str) -> tuple[str | None, str | None, str | None, 
     agent_name = remaining[0]
     prompt = " ".join(remaining[1:])
 
-    # Basic email validation
-    if "@" not in email or "." not in email:
+    # Basic email validation (only if provided)
+    if email and ("@" not in email or "." not in email):
         return None, None, None, None, None, f"Invalid email address: {email}"
 
     return schedule, agent_name, prompt, email, run_at, None
@@ -390,13 +391,13 @@ async def _handle_cmd_cron(bot: Bot, chat_id: int, text: str, model_name: str | 
     )
 
     time_info = f"\n• Time: `{job.run_at}` UTC" if job.run_at else ""
+    email_info = f"\n• Email: {job.email}" if job.email else "\n• Email: _(none — Telegram only)_"
     await bot.send_message(
         chat_id=chat_id,
         text=(
             f"✅ Cron job created (ID: `{job.id}`)\n\n"
             f"• Agent: `{job.agent_name}`\n"
-            f"• Schedule: `{job.schedule}`{time_info}\n"
-            f"• Email: {job.email}\n"
+            f"• Schedule: `{job.schedule}`{time_info}{email_info}\n"
             f"• Prompt: {job.prompt[:100]}{'...' if len(job.prompt) > 100 else ''}\n\n"
             f"Use /crons to list jobs, /uncron {job.id} to delete."
         ),
@@ -421,9 +422,10 @@ async def _handle_cmd_crons(bot: Bot, chat_id: int) -> None:
             dt = datetime.datetime.fromtimestamp(j.last_run, tz=datetime.timezone.utc)
             last = dt.strftime("%Y-%m-%d %H:%M UTC")
         status = "✅" if j.enabled else "⏸"
+        email_line = f"   📧 {j.email} | " if j.email else "   "
         lines.append(
             f"{status} `{j.id}` — `{j.agent_name}` ({j.schedule})\n"
-            f"   📧 {j.email} | Last run: {last}\n"
+            f"{email_line}Last run: {last}\n"
             f"   Prompt: {j.prompt[:60]}{'...' if len(j.prompt) > 60 else ''}"
         )
 
