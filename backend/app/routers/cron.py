@@ -107,8 +107,8 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
     if job.email:
         email_sent = email_service.send_result_email(job.email, subject, body, attachments=attachments)
 
-    # Send short Telegram notification
-    tg_status = await _notify_telegram(job, error=error, email_sent=email_sent)
+    # Send short Telegram notification (include output if no email)
+    tg_status = await _notify_telegram(job, error=error, email_sent=email_sent, output=output)
 
     return {
         "status": "error" if error else "ok",
@@ -120,9 +120,10 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
 
 
 async def _notify_telegram(
-    job: cron_store.CronJob, error: str | None = None, email_sent: bool = True
+    job: cron_store.CronJob, error: str | None = None, email_sent: bool = True, output: str = ""
 ) -> bool:
-    """Send a short notification to the Telegram chat that created this job."""
+    """Send a short notification to the Telegram chat that created this job.
+    When no email is configured, sends the full output directly in Telegram."""
     if not settings.telegram_bot_token:
         return False
 
@@ -132,15 +133,40 @@ async def _notify_telegram(
 
         if error:
             text = f"❌ Cron job `{job.agent_name}` (ID: `{job.id}`) failed:\n{error[:200]}"
+            await bot.send_message(chat_id=job.chat_id, text=text, parse_mode="Markdown")
         elif not job.email:
-            text = f"✅ Cron job `{job.agent_name}` (ID: `{job.id}`) completed."
+            # No email — send full results in Telegram
+            header = f"✅ Cron job `{job.agent_name}` (ID: `{job.id}`) completed.\n\n"
+            full_text = header + (output if output else "(no output)")
+            # Telegram has a 4096 char limit per message, split if needed
+            for chunk in _split_telegram_message(full_text):
+                await bot.send_message(chat_id=job.chat_id, text=chunk)
         elif not email_sent:
             text = f"⚠️ Cron job `{job.agent_name}` (ID: `{job.id}`) completed, but the email to {job.email} failed to send."
+            await bot.send_message(chat_id=job.chat_id, text=text, parse_mode="Markdown")
         else:
             text = f"✅ Cron job `{job.agent_name}` (ID: `{job.id}`) completed. Results emailed to {job.email}."
+            await bot.send_message(chat_id=job.chat_id, text=text, parse_mode="Markdown")
 
-        await bot.send_message(chat_id=job.chat_id, text=text, parse_mode="Markdown")
         return True
     except Exception:
         logger.exception("Failed to send Telegram notification for job %s", job.id)
         return False
+
+
+def _split_telegram_message(text: str, max_len: int = 4096) -> list[str]:
+    """Split a long message into chunks that fit Telegram's message size limit."""
+    if len(text) <= max_len:
+        return [text]
+    chunks = []
+    while text:
+        if len(text) <= max_len:
+            chunks.append(text)
+            break
+        # Try to split at a newline
+        split_at = text.rfind("\n", 0, max_len)
+        if split_at < max_len // 2:
+            split_at = max_len
+        chunks.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    return chunks
