@@ -29,6 +29,15 @@ async def lifespan(app: FastAPI):
             "blob_storage_configured": bool(settings.azure_storage_connection_string),
         },
     )
+    # Startup: restore workspace from blob storage (agents, skills, data files)
+    try:
+        from app.services.blob_storage import restore_workspace_from_storage
+        restored = restore_workspace_from_storage()
+        if restored:
+            logger.info("Restored %d files from blob storage", restored)
+    except Exception:
+        logger.exception("Failed to restore workspace from blob storage")
+
     # Startup: discover available models from Copilot CLI
     try:
         from app.services.copilot import discover_models

@@ -291,3 +291,29 @@ def sync_workspace_to_storage() -> int:
         _azure_upload_blob(rel_str, data, ct)
         count += 1
     return count
+
+
+def restore_workspace_from_storage() -> int:
+    """Download all files from blob storage into the local workspace directory.
+    This restores agents, skills, data files, and tools that were previously
+    synced to blob storage. Skips sessions/ prefix.
+    Called at startup to ensure the workspace has the latest persisted state.
+    Returns the number of files restored."""
+    if not _use_azure:
+        return 0
+    workspace = Path(settings.workspace_dir)
+    workspace.mkdir(parents=True, exist_ok=True)
+    container = _get_container_client()
+    count = 0
+    for blob in container.list_blobs():
+        name = blob.name
+        parts = name.split("/")
+        # Skip sessions and __pycache__
+        if parts[0] == "sessions" or "__pycache__" in parts:
+            continue
+        local_path = workspace / name
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        data = container.download_blob(name).readall()
+        local_path.write_bytes(data)
+        count += 1
+    return count

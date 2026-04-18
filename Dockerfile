@@ -42,6 +42,7 @@ COPY frontend/ ./frontend/
 COPY workspace/.github/agents/ /workspace/.github/agents/
 COPY workspace/.github/skills/ /workspace/.github/skills/
 COPY workspace/tools/ /workspace/tools/
+COPY workspace/data/ /workspace/data/
 
 # Install tool dependencies if present
 RUN if [ -f /workspace/tools/job-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/job-scanner/requirements.txt; fi
