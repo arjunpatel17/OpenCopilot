@@ -317,3 +317,23 @@ def restore_workspace_from_storage() -> int:
         local_path.write_bytes(data)
         count += 1
     return count
+
+
+def restore_data_from_storage() -> int:
+    """Download data files (data/ prefix) from blob storage to local workspace.
+    Called before agent runs to ensure the agent always sees the latest
+    persisted data regardless of the local file state.
+    Returns the number of files restored."""
+    if not _use_azure:
+        return 0
+    workspace = Path(settings.workspace_dir)
+    workspace.mkdir(parents=True, exist_ok=True)
+    container = _get_container_client()
+    count = 0
+    for blob in container.list_blobs(name_starts_with="data/"):
+        local_path = workspace / blob.name
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        data = container.download_blob(blob.name).readall()
+        local_path.write_bytes(data)
+        count += 1
+    return count

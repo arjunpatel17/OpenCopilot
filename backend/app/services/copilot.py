@@ -152,6 +152,13 @@ def _prepend_history(prompt: str, history: str | None) -> str:
 
 async def run_code_chat(prompt: str, agent_name: str | None = None, *, model_name: str | None = None, history: str | None = None) -> AsyncIterator[str]:
     """Run a prompt via the standalone `copilot` CLI with structured JSONL output."""
+    # Ensure data files are fresh from blob storage before the agent reads them
+    try:
+        from app.services.blob_storage import restore_data_from_storage
+        restore_data_from_storage()
+    except Exception:
+        logger.debug("Data restore from blob skipped", exc_info=True)
+
     prompt = _prepend_history(prompt, history)
     copilot_path = _find_cli("copilot")
     if not copilot_path:
