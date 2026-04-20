@@ -17,8 +17,8 @@ def send_result_email(
     subject: str,
     body: str,
     attachments: list[tuple[str, str | bytes]] | None = None,
-) -> bool:
-    """Send an email with results. Returns True on success.
+) -> tuple[bool, str]:
+    """Send an email with results. Returns (success, error_reason).
 
     Args:
         to: Recipient email address.
@@ -29,15 +29,15 @@ def send_result_email(
     """
     if not _EMAIL_RE.match(to):
         logger.warning("Invalid email address rejected: %s", to)
-        return False
+        return False, f"Invalid email address: {to}"
 
     if not settings.azure_comm_connection_string:
         logger.warning("AZURE_COMM_CONNECTION_STRING not set, skipping email to %s", to)
-        return False
+        return False, "AZURE_COMM_CONNECTION_STRING not configured"
 
     if not settings.email_sender_address:
         logger.warning("EMAIL_SENDER_ADDRESS not set, skipping email to %s", to)
-        return False
+        return False, "EMAIL_SENDER_ADDRESS not configured"
 
     try:
         from azure.communication.email import EmailClient
@@ -73,8 +73,8 @@ def send_result_email(
         poller = client.begin_send(message)
         result = poller.result()
         logger.info("Email sent to %s, message ID: %s", to, result.get("id", "unknown"))
-        return True
+        return True, ""
 
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to send email to %s", to)
-        return False
+        return False, str(exc)

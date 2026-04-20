@@ -77,8 +77,8 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
         for rel_path in sorted(new_files):
             fp = workspace / rel_path
             try:
-                attachments.append((rel_path, fp.read_text(encoding="utf-8", errors="replace")))
-            except Exception:
+                attachments.append((rel_path, fp.read_text(encoding="utf-8")))
+            except (UnicodeDecodeError, ValueError):
                 try:
                     attachments.append((rel_path, fp.read_bytes()))
                 except Exception:
@@ -104,11 +104,12 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
         body = "\n".join(parts)
 
     email_sent = False
+    email_error = ""
     if job.email:
-        email_sent = email_service.send_result_email(job.email, subject, body, attachments=attachments)
+        email_sent, email_error = email_service.send_result_email(job.email, subject, body, attachments=attachments)
 
     # Send short Telegram notification (include output if no email)
-    tg_status = await _notify_telegram(job, error=error, email_sent=email_sent, output=output)
+    tg_status = await _notify_telegram(job, error=error, email_sent=email_sent, email_error=email_error, output=output)
 
     return {
         "status": "error" if error else "ok",
@@ -120,7 +121,7 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
 
 
 async def _notify_telegram(
-    job: cron_store.CronJob, error: str | None = None, email_sent: bool = True, output: str = ""
+    job: cron_store.CronJob, error: str | None = None, email_sent: bool = True, email_error: str = "", output: str = ""
 ) -> bool:
     """Send a short notification to the Telegram chat that created this job.
     When no email is configured, sends the full output directly in Telegram."""
@@ -142,7 +143,8 @@ async def _notify_telegram(
             for chunk in _split_telegram_message(full_text):
                 await bot.send_message(chat_id=job.chat_id, text=chunk)
         elif not email_sent:
-            text = f"⚠️ Cron job `{job.agent_name}` (ID: `{job.id}`) completed, but the email to {job.email} failed to send."
+            reason = f"\nReason: {email_error}" if email_error else ""
+            text = f"⚠️ Cron job `{job.agent_name}` (ID: `{job.id}`) completed, but the email to {job.email} failed to send.{reason}"
             await bot.send_message(chat_id=job.chat_id, text=text, parse_mode="Markdown")
         else:
             text = f"✅ Cron job `{job.agent_name}` (ID: `{job.id}`) completed. Results emailed to {job.email}."
