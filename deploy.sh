@@ -183,6 +183,8 @@ az functionapp config appsettings set \
     --settings \
         "CONTAINER_APP_URL=https://$APP_URL" \
         "CRON_SECRET=$CRON_SECRET" \
+        "STORAGE_CONNECTION_STRING=$STORAGE_CONNECTION_STRING" \
+        "STORAGE_CONTAINER=$STORAGE_CONTAINER" \
     --output none
 
 # Deploy function code
