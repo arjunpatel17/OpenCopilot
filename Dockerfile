@@ -49,6 +49,14 @@ RUN if [ -f /workspace/tools/news-scanner/requirements.txt ]; then pip install -
 RUN if [ -f /workspace/tools/sleeper-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/sleeper-scanner/requirements.txt; fi
 
 # gh auth: at runtime, GH_TOKEN env var will authenticate automatically
+# Create a gh wrapper that uses GH_REPO_TOKEN for repo operations
+# The real gh is at /usr/bin/gh; wrapper goes in /usr/local/bin (higher PATH priority)
+RUN printf '#!/bin/sh\nGH_TOKEN="${GH_REPO_TOKEN:-$GH_TOKEN}" exec /usr/bin/gh "$@"\n' \
+    > /usr/local/bin/gh && chmod +x /usr/local/bin/gh
+
+# Configure git to use GH_REPO_TOKEN for HTTPS auth to GitHub
+RUN git config --system credential.helper '!f() { echo "username=x-access-token"; echo "password=${GH_REPO_TOKEN:-$GH_TOKEN}"; }; f'
+
 ENV WORKSPACE_DIR=/workspace
 ENV AGENTS_DIR=.github/agents
 ENV SKILLS_DIR=.github/skills
