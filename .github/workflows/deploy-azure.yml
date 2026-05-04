@@ -1,0 +1,78 @@
+name: Update OpenCopilot on Azure
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'blog/**'
+  workflow_dispatch:
+
+env:
+  RESOURCE_GROUP: opencopilot-rg
+  CONTAINER_APP_NAME: opencopilot
+  IMAGE_NAME: opencopilot
+  FUNC_APP_NAME: opencopilot-cron
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Detect ACR
+        id: detect
+        run: |
+          CURRENT_IMAGE=$(az containerapp show \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --query "properties.template.containers[0].image" -o tsv)
+          ACR_NAME=$(echo "$CURRENT_IMAGE" | cut -d'.' -f1)
+          echo "acr_name=$ACR_NAME" >> "$GITHUB_OUTPUT"
+          echo "Detected ACR: $ACR_NAME"
+
+      - name: Build new image in ACR
+        run: |
+          az acr build \
+            --registry ${{ steps.detect.outputs.acr_name }} \
+            --image ${{ env.IMAGE_NAME }}:latest \
+            --file Dockerfile . \
+            --no-logs
+
+      - name: Update container app
+        run: |
+          ACR_NAME="${{ steps.detect.outputs.acr_name }}"
+          az containerapp update \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --image "$ACR_NAME.azurecr.io/${{ env.IMAGE_NAME }}:latest" \
+            --revision-suffix "deploy-$(date +%s)" \
+            --output none
+
+      - name: Update cron function
+        run: |
+          cd azure-function
+          pip install azure-functions-core-tools 2>/dev/null || true
+          func azure functionapp publish ${{ env.FUNC_APP_NAME }} --python || echo "Function publish skipped"
+
+      - name: Show update summary
+        run: |
+          APP_URL=$(az containerapp show \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "============================================"
+          echo "  UPDATE COMPLETE!"
+          echo "============================================"
+          echo "  App URL: https://$APP_URL"
+          echo "============================================"

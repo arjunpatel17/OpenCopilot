@@ -1,0 +1,220 @@
+name: Deploy OpenCopilot to Azure (Full)
+
+on:
+  workflow_dispatch:
+
+env:
+  AZURE_REGION: eastus
+  RESOURCE_GROUP: opencopilot-rg
+  CONTAINER_APP_NAME: opencopilot
+  CONTAINER_ENV_NAME: opencopilot-env
+  IMAGE_NAME: opencopilot
+  FUNC_APP_NAME: opencopilot-cron
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Create resource group
+        run: |
+          az group create \
+            --name ${{ env.RESOURCE_GROUP }} \
+            --location ${{ env.AZURE_REGION }} \
+            --output none
+
+      - name: Create ACR and build container image
+        id: acr
+        run: |
+          ACR_NAME="opencopilotacr"
+          az acr create --resource-group ${{ env.RESOURCE_GROUP }} --name $ACR_NAME --sku Basic --admin-enabled true --output none 2>/dev/null || true
+          az acr build --registry $ACR_NAME --image ${{ env.IMAGE_NAME }}:latest --file Dockerfile . --no-logs
+          echo "acr_name=$ACR_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Create storage account
+        id: storage
+        run: |
+          STORAGE_NAME="opencopilotsa"
+          STORAGE_CONTAINER="copilot-files"
+          az storage account create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name $STORAGE_NAME \
+            --location ${{ env.AZURE_REGION }} \
+            --sku Standard_LRS \
+            --min-tls-version TLS1_2 \
+            --output none 2>/dev/null || true
+          CONN=$(az storage account show-connection-string \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name $STORAGE_NAME \
+            --query connectionString -o tsv)
+          az storage container create --name $STORAGE_CONTAINER --connection-string "$CONN" --output none 2>/dev/null || true
+          echo "storage_conn=$CONN" >> "$GITHUB_OUTPUT"
+          echo "storage_container=$STORAGE_CONTAINER" >> "$GITHUB_OUTPUT"
+
+      - name: Create Container Apps environment
+        run: |
+          az containerapp env create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.CONTAINER_ENV_NAME }} \
+            --location ${{ env.AZURE_REGION }} \
+            --output none 2>/dev/null || true
+
+      - name: Deploy container app
+        run: |
+          ACR_NAME="${{ steps.acr.outputs.acr_name }}"
+          ACR_USERNAME=$(az acr credential show --name $ACR_NAME --query username -o tsv)
+          ACR_PASSWORD=$(az acr credential show --name $ACR_NAME --query "passwords[0].value" -o tsv)
+          CRON_SECRET=$(openssl rand -hex 16)
+
+          # Create or update the container app
+          az containerapp create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --environment ${{ env.CONTAINER_ENV_NAME }} \
+            --image "$ACR_NAME.azurecr.io/${{ env.IMAGE_NAME }}:latest" \
+            --registry-server "$ACR_NAME.azurecr.io" \
+            --registry-username "$ACR_USERNAME" \
+            --registry-password "$ACR_PASSWORD" \
+            --target-port 8000 \
+            --ingress external \
+            --min-replicas 0 \
+            --max-replicas 1 \
+            --cpu 1 \
+            --memory 2Gi \
+            --env-vars \
+              "GH_TOKEN=secretref:gh-token" \
+              "GH_REPO_TOKEN=secretref:gh-repo-token" \
+              "GITHUB_PERSONAL_ACCESS_TOKEN=secretref:gh-repo-token" \
+              "AZURE_STORAGE_CONNECTION_STRING=secretref:storage-conn" \
+              "AZURE_STORAGE_CONTAINER=${{ steps.storage.outputs.storage_container }}" \
+              "WORKSPACE_DIR=/workspace" \
+              "AUTH_ENABLED=false" \
+              "CRON_SECRET=secretref:cron-secret" \
+            --secrets \
+              "gh-token=${{ secrets.GH_COPILOT_TOKEN }}" \
+              "gh-repo-token=${{ secrets.GH_REPO_TOKEN }}" \
+              "storage-conn=${{ steps.storage.outputs.storage_conn }}" \
+              "cron-secret=$CRON_SECRET" \
+            --output none 2>/dev/null || \
+          az containerapp update \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --image "$ACR_NAME.azurecr.io/${{ env.IMAGE_NAME }}:latest" \
+            --output none
+
+      - name: Set scale cooldown
+        run: |
+          SCALE_YAML=$(mktemp)
+          cat > "$SCALE_YAML" <<EOF
+          properties:
+            template:
+              scale:
+                cooldownPeriod: 1800
+                minReplicas: 0
+                maxReplicas: 1
+          EOF
+          az containerapp update \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --yaml "$SCALE_YAML" \
+            --output none
+          rm -f "$SCALE_YAML"
+
+      - name: Deploy cron function
+        run: |
+          APP_URL=$(az containerapp show \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+
+          FUNC_STORAGE="opencopilotcronsa"
+          az storage account create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name $FUNC_STORAGE \
+            --location ${{ env.AZURE_REGION }} \
+            --sku Standard_LRS \
+            --min-tls-version TLS1_2 \
+            --output none 2>/dev/null || true
+
+          az functionapp create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.FUNC_APP_NAME }} \
+            --storage-account $FUNC_STORAGE \
+            --consumption-plan-location ${{ env.AZURE_REGION }} \
+            --runtime python --runtime-version 3.12 \
+            --functions-version 4 --os-type Linux \
+            --https-only true \
+            --output none 2>/dev/null || true
+
+          az functionapp config appsettings set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.FUNC_APP_NAME }} \
+            --settings \
+              "CONTAINER_APP_URL=https://$APP_URL" \
+              "CRON_SECRET=${{ secrets.CRON_SECRET }}" \
+              "STORAGE_CONNECTION_STRING=${{ steps.storage.outputs.storage_conn }}" \
+              "STORAGE_CONTAINER=${{ steps.storage.outputs.storage_container }}" \
+            --output none
+
+      - name: Publish cron function code
+        run: |
+          cd azure-function
+          pip install azure-functions-core-tools 2>/dev/null || true
+          func azure functionapp publish ${{ env.FUNC_APP_NAME }} --python || echo "Function publish skipped — install func CLI"
+
+      - name: Configure Telegram bot
+        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' }}
+        run: |
+          APP_URL=$(az containerapp show \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          WEBHOOK_SECRET="opencopilot-$(openssl rand -hex 8)"
+
+          az containerapp secret set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --secrets \
+              "telegram-token=${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+              "telegram-secret=$WEBHOOK_SECRET" \
+            --output none
+
+          az containerapp update \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --set-env-vars \
+              "TELEGRAM_BOT_TOKEN=secretref:telegram-token" \
+              "TELEGRAM_WEBHOOK_SECRET=secretref:telegram-secret" \
+            --output none
+
+          sleep 15
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/setWebhook?url=https://${APP_URL}/api/telegram/webhook&secret_token=${WEBHOOK_SECRET}"
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/setMyCommands" \
+            -H "Content-Type: application/json" \
+            -d '{"commands": [{"command": "start", "description": "Show help and usage info"},{"command": "agent", "description": "Run an agent: /agent name prompt"}]}'
+
+      - name: Show deployment summary
+        run: |
+          APP_URL=$(az containerapp show \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "============================================"
+          echo "  DEPLOYMENT COMPLETE!"
+          echo "============================================"
+          echo "  App URL:  https://$APP_URL"
+          echo "  Resource Group: ${{ env.RESOURCE_GROUP }}"
+          echo "============================================"
