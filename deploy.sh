@@ -124,6 +124,7 @@ az containerapp create \
     --env-vars \
         "GH_TOKEN=secretref:gh-token" \
         "GH_REPO_TOKEN=secretref:gh-repo-token" \
+        "GITHUB_PERSONAL_ACCESS_TOKEN=secretref:gh-repo-token" \
         "AZURE_STORAGE_CONNECTION_STRING=secretref:storage-conn" \
         "AZURE_STORAGE_CONTAINER=$STORAGE_CONTAINER" \
         "WORKSPACE_DIR=/workspace" \
