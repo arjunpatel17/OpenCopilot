@@ -127,7 +127,7 @@ az containerapp create \
         "AZURE_STORAGE_CONNECTION_STRING=secretref:storage-conn" \
         "AZURE_STORAGE_CONTAINER=$STORAGE_CONTAINER" \
         "WORKSPACE_DIR=/workspace" \
-        "AUTH_ENABLED=true" \
+        "AUTH_ENABLED=false" \
     --secrets \
         "gh-token=$GH_TOKEN" \
         "gh-repo-token=$GH_REPO_TOKEN" \
