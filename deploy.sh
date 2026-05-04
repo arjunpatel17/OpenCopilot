@@ -16,11 +16,19 @@ IMAGE_NAME="opencopilot"
 STORAGE_ACCOUNT_NAME="opencopilotsa$(openssl rand -hex 3)"
 STORAGE_CONTAINER="copilot-files"
 
-# GitHub token for gh copilot in the container
-GH_TOKEN=$(gh auth token 2>/dev/null)
+# GitHub tokens for the container:
+#   GH_TOKEN      — arjun-d-patel (Copilot LLM access)
+#   GH_REPO_TOKEN — arjunpatel17  (git repo operations: clone, push, PRs)
+GH_TOKEN=$(gh auth token --user arjun-d-patel 2>/dev/null || gh auth token 2>/dev/null)
+GH_REPO_TOKEN=$(gh auth token --user arjunpatel17 2>/dev/null || echo "")
 if [[ -z "$GH_TOKEN" ]]; then
     echo "ERROR: Not logged into GitHub CLI. Run: gh auth login"
     exit 1
+fi
+if [[ -z "$GH_REPO_TOKEN" ]]; then
+    echo "WARNING: arjunpatel17 token not found — git repo operations may fail."
+    echo "         Run: gh auth login --user arjunpatel17"
+    GH_REPO_TOKEN="$GH_TOKEN"  # fallback to LLM token
 fi
 
 echo "=== OpenCopilot Azure Deployment ==="
@@ -115,12 +123,14 @@ az containerapp create \
     --memory 2Gi \
     --env-vars \
         "GH_TOKEN=secretref:gh-token" \
+        "GH_REPO_TOKEN=secretref:gh-repo-token" \
         "AZURE_STORAGE_CONNECTION_STRING=secretref:storage-conn" \
         "AZURE_STORAGE_CONTAINER=$STORAGE_CONTAINER" \
         "WORKSPACE_DIR=/workspace" \
         "AUTH_ENABLED=true" \
     --secrets \
         "gh-token=$GH_TOKEN" \
+        "gh-repo-token=$GH_REPO_TOKEN" \
         "storage-conn=$STORAGE_CONNECTION_STRING" \
     --output none
 
