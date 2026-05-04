@@ -16,6 +16,13 @@ logger.setLevel(logging.DEBUG)
 AGENT_CMD_PREFIX = "/agent "
 MODEL_FLAG_RE = re.compile(r'--model\s+(\S+)')
 
+
+def _escape_md(text: str) -> str:
+    """Escape Telegram Markdown v1 special characters in plain text."""
+    for ch in ('_', '*', '`', '['):
+        text = text.replace(ch, f'\\{ch}')
+    return text
+
 # ========== Per-chat concurrency locks ==========
 
 _chat_locks: dict[int, asyncio.Lock] = {}
@@ -152,7 +159,7 @@ async def _handle_cmd_agents(bot: Bot, chat_id: int) -> None:
         return
     lines = ["🤖 *Available Agents:*\n"]
     for a in agents:
-        desc = f" — {a.description}" if a.description else ""
+        desc = f" — {_escape_md(a.description)}" if a.description else ""
         skills_info = f" ({a.skills_count} skills)" if a.skills_count else ""
         lines.append(f"• `{a.name}`{desc}{skills_info}")
     lines.append(f"\nUse: /agent <name> <prompt>")
@@ -172,7 +179,7 @@ async def _handle_cmd_skills(bot: Bot, chat_id: int) -> None:
                 fm, _ = parse_markdown_file(raw)
                 name = fm.get("name", f.stem.removesuffix(".skill"))
                 desc = fm.get("description", "")
-                skills.append((name, desc))
+                skills.append((name, _escape_md(desc) if desc else ""))
             except Exception:
                 continue
 
