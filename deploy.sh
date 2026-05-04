@@ -286,6 +286,70 @@ az containerapp update \
 
 echo "    Email configured on container app"
 
+# ---------- Step 11: Configure Telegram Bot ----------
+TELEGRAM_BOT_INFO="(not configured)"
+ENV_FILE="$(dirname "$0")/backend/.env"
+if [[ -f "$ENV_FILE" ]]; then
+    TELEGRAM_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '[:space:]')
+    TELEGRAM_SECRET=$(grep '^TELEGRAM_WEBHOOK_SECRET=' "$ENV_FILE" | cut -d= -f2- | tr -d '[:space:]')
+fi
+
+if [[ -n "${TELEGRAM_TOKEN:-}" && "${TELEGRAM_TOKEN:-}" != "" ]]; then
+    echo ">>> Step 11: Configuring Telegram bot..."
+
+    # Generate a new webhook secret if not found in .env
+    if [[ -z "${TELEGRAM_SECRET:-}" ]]; then
+        TELEGRAM_SECRET="opencopilot-$(openssl rand -hex 8)"
+    fi
+
+    # Set Telegram secrets on container app
+    az containerapp secret set \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$CONTAINER_APP_NAME" \
+        --secrets \
+            "telegram-token=${TELEGRAM_TOKEN}" \
+            "telegram-secret=${TELEGRAM_SECRET}" \
+        --output none 2>/dev/null
+
+    az containerapp update \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$CONTAINER_APP_NAME" \
+        --set-env-vars \
+            "TELEGRAM_BOT_TOKEN=secretref:telegram-token" \
+            "TELEGRAM_WEBHOOK_SECRET=secretref:telegram-secret" \
+        --output none 2>/dev/null
+
+    # Wait for container to restart with new secrets
+    echo "    Waiting for container to restart..."
+    sleep 15
+
+    # Register webhook with Telegram
+    WEBHOOK_URL="https://${APP_URL}/api/telegram/webhook"
+    WEBHOOK_RESULT=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook?url=${WEBHOOK_URL}&secret_token=${TELEGRAM_SECRET}")
+    WEBHOOK_OK=$(echo "$WEBHOOK_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ok', False))" 2>/dev/null || echo "False")
+
+    if [[ "$WEBHOOK_OK" == "True" ]]; then
+        # Get bot username for display
+        BOT_USERNAME=$(curl -s "https://api.telegram.org/bot${TELEGRAM_TOKEN}/getMe" | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['username'])" 2>/dev/null || echo "unknown")
+        TELEGRAM_BOT_INFO="@${BOT_USERNAME} (https://t.me/${BOT_USERNAME})"
+
+        # Set bot commands
+        curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/setMyCommands" \
+            -H "Content-Type: application/json" \
+            -d '{"commands": [{"command": "start", "description": "Show help and usage info"},{"command": "agent", "description": "Run an agent: /agent name prompt"}]}' > /dev/null 2>&1
+
+        echo "    Telegram webhook registered: ${WEBHOOK_URL}"
+        echo "    Bot: @${BOT_USERNAME}"
+    else
+        TELEGRAM_BOT_INFO="(webhook failed — run setup-telegram.sh manually)"
+        echo "    ⚠ Webhook registration failed: $WEBHOOK_RESULT"
+        echo "    Run setup-telegram.sh manually after deployment."
+    fi
+else
+    echo ">>> Step 11: Skipping Telegram (no TELEGRAM_BOT_TOKEN in backend/.env)"
+    echo "    To add Telegram later: APP_URL=https://$APP_URL ./setup-telegram.sh"
+fi
+
 echo ""
 echo "============================================"
 echo "  DEPLOYMENT COMPLETE!"
@@ -298,6 +362,7 @@ echo "  Container Registry: $ACR_NAME"
 echo "  Storage Account:    $STORAGE_ACCOUNT_NAME"
 echo "  Function App:       $FUNC_APP_NAME"
 echo "  Email Sender:       $EMAIL_SENDER"
+echo "  Telegram Bot:       $TELEGRAM_BOT_INFO"
 echo ""
 echo "  To update after code changes:  ./update.sh"
 echo ""
