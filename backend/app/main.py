@@ -31,10 +31,15 @@ async def lifespan(app: FastAPI):
     )
     # Startup: restore workspace from blob storage (agents, skills, data files)
     try:
-        from app.services.blob_storage import restore_workspace_from_storage
+        from app.services.blob_storage import restore_workspace_from_storage, sync_workspace_to_storage
         restored = restore_workspace_from_storage()
         if restored:
             logger.info("Restored %d files from blob storage", restored)
+        # Push deploy-managed files (agents, skills, tools, .copilot) to blob
+        # so blob storage always reflects the latest deployed versions
+        synced = sync_workspace_to_storage()
+        if synced:
+            logger.info("Synced %d workspace files to blob storage", synced)
     except Exception:
         logger.exception("Failed to restore workspace from blob storage")
 

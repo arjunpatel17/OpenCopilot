@@ -280,8 +280,8 @@ def sync_workspace_to_storage() -> int:
             continue
         rel = fp.relative_to(workspace)
         parts = rel.parts
-        # Skip hidden dirs (except .github), sessions, and __pycache__
-        if any((p.startswith(".") and p != ".github") or p == "__pycache__" for p in parts):
+        # Skip hidden dirs (except .github and .copilot), sessions, and __pycache__
+        if any((p.startswith(".") and p not in (".github", ".copilot")) or p == "__pycache__" for p in parts):
             continue
         if parts[0] == "sessions":
             continue
@@ -298,6 +298,9 @@ def restore_workspace_from_storage() -> int:
     This restores agents, skills, data files, and tools that were previously
     synced to blob storage. Skips sessions/ prefix.
     Called at startup to ensure the workspace has the latest persisted state.
+    For .github/agents/, .github/skills/, and .copilot/ files, the Docker image
+    version takes precedence — blob storage will not overwrite files that
+    already exist in those directories (they are managed by code deploys).
     Returns the number of files restored."""
     if not _use_azure:
         return 0
@@ -305,6 +308,8 @@ def restore_workspace_from_storage() -> int:
     workspace.mkdir(parents=True, exist_ok=True)
     container = _get_container_client()
     count = 0
+    # Directories where Docker image files take precedence over blob storage
+    _deploy_managed_prefixes = (".github/agents/", ".github/skills/", ".copilot/", "tools/")
     for blob in container.list_blobs():
         name = blob.name
         parts = name.split("/")
@@ -312,6 +317,9 @@ def restore_workspace_from_storage() -> int:
         if parts[0] == "sessions" or "__pycache__" in parts:
             continue
         local_path = workspace / name
+        # Don't overwrite deploy-managed files that already exist from the image
+        if any(name.startswith(p) for p in _deploy_managed_prefixes) and local_path.exists():
+            continue
         local_path.parent.mkdir(parents=True, exist_ok=True)
         data = container.download_blob(name).readall()
         local_path.write_bytes(data)
