@@ -21,7 +21,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 RUN npm install -g @github/copilot
 
 # Create workspace directory
-RUN mkdir -p /workspace/.github/agents /workspace/.github/skills
+RUN mkdir -p /workspace/.github/agents /workspace/.github/skills /workspace/.copilot /workspace/reports
 
 # Initialize workspace as a git repo (copilot CLI discovers agents from git root)
 RUN git -C /workspace init
@@ -42,6 +42,9 @@ COPY frontend/ ./frontend/
 COPY workspace/.github/agents/ /workspace/.github/agents/
 COPY workspace/.github/skills/ /workspace/.github/skills/
 COPY workspace/tools/ /workspace/tools/
+
+# Copy MCP server configuration
+COPY workspace/.copilot/ /workspace/.copilot/
 
 # Install tool dependencies if present
 RUN if [ -f /workspace/tools/job-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/job-scanner/requirements.txt; fi
