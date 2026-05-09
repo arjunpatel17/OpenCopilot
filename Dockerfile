@@ -17,8 +17,8 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install GitHub Copilot CLI (standalone)
-RUN npm install -g @github/copilot
+# Install GitHub Copilot CLI (standalone) and MCP servers
+RUN npm install -g @github/copilot paper-search-mcp-nodejs
 
 # Create workspace directory
 RUN mkdir -p /workspace/.github/agents /workspace/.github/skills /workspace/.copilot /workspace/reports
@@ -66,7 +66,8 @@ ENV SKILLS_DIR=.github/skills
 
 # Create non-root user and set ownership
 RUN useradd -m -s /bin/bash appuser && \
-    chown -R appuser:appuser /workspace /app
+    chown -R appuser:appuser /workspace /app && \
+    mkdir -p /home/appuser/.npm && chown -R appuser:appuser /home/appuser/.npm
 
 EXPOSE 8000
 
