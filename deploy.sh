@@ -105,6 +105,20 @@ echo ">>> Step 6/7: Getting registry credentials..."
 ACR_USERNAME=$(az acr credential show --name "$ACR_NAME" --query username -o tsv)
 ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --query "passwords[0].value" -o tsv)
 
+# ---------- Optional third-party API keys (read from backend/.env if present) ----------
+# Same pattern as TELEGRAM_BOT_TOKEN further below.
+ENV_FILE_FOR_KEYS="$(dirname "$0")/backend/.env"
+FINNHUB_API_KEY=""
+if [[ -f "$ENV_FILE_FOR_KEYS" ]]; then
+    FINNHUB_API_KEY=$(grep '^FINNHUB_API_KEY=' "$ENV_FILE_FOR_KEYS" | cut -d= -f2- | tr -d '[:space:]')
+fi
+if [[ -z "$FINNHUB_API_KEY" ]]; then
+    echo "    NOTE: FINNHUB_API_KEY not found in $ENV_FILE_FOR_KEYS."
+    echo "          earnings-calendar agent will fail-fast until you add it:"
+    echo "          az containerapp secret set -g $RESOURCE_GROUP -n $CONTAINER_APP_NAME --secrets finnhub-key=<key>"
+    echo "          az containerapp update      -g $RESOURCE_GROUP -n $CONTAINER_APP_NAME --set-env-vars FINNHUB_API_KEY=secretref:finnhub-key"
+fi
+
 # ---------- Step 7: Deploy Container App ----------
 echo ">>> Step 7/7: Deploying container app..."
 az containerapp create \
@@ -134,6 +148,24 @@ az containerapp create \
         "gh-repo-token=$GH_REPO_TOKEN" \
         "storage-conn=$STORAGE_CONNECTION_STRING" \
     --output none
+
+# ---------- Optional: wire FINNHUB_API_KEY if present in backend/.env ----------
+# Same two-step pattern used for Telegram below: secret-set, then update env vars.
+# Required by the earnings-calendar / stocks-social-media agents.
+if [[ -n "$FINNHUB_API_KEY" ]]; then
+    echo "    Wiring FINNHUB_API_KEY from backend/.env..."
+    az containerapp secret set \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$CONTAINER_APP_NAME" \
+        --secrets "finnhub-key=$FINNHUB_API_KEY" \
+        --output none
+
+    az containerapp update \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$CONTAINER_APP_NAME" \
+        --set-env-vars "FINNHUB_API_KEY=secretref:finnhub-key" \
+        --output none
+fi
 
 # Set a longer scale cooldown (30 min) so long-running agent tasks over
 # WebSocket don't get killed by a premature scale-to-zero.

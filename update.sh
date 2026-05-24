@@ -50,6 +50,28 @@ az containerapp update \
     --revision-suffix "deploy-$(date +%s)" \
     --output none
 
+# Step 2a: Re-apply optional API keys from backend/.env so a rotated or
+# newly-added key flows to Azure on the next update — no need to re-run deploy.sh.
+# Mirrors the wiring step in deploy.sh.
+ENV_FILE_FOR_KEYS="$(dirname "$0")/backend/.env"
+if [[ -f "$ENV_FILE_FOR_KEYS" ]]; then
+    FINNHUB_API_KEY=$(grep '^FINNHUB_API_KEY=' "$ENV_FILE_FOR_KEYS" | cut -d= -f2- | tr -d '[:space:]')
+    if [[ -n "${FINNHUB_API_KEY:-}" ]]; then
+        echo "    Syncing FINNHUB_API_KEY from backend/.env..."
+        az containerapp secret set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP_NAME" \
+            --secrets "finnhub-key=$FINNHUB_API_KEY" \
+            --output none
+
+        az containerapp update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP_NAME" \
+            --set-env-vars "FINNHUB_API_KEY=secretref:finnhub-key" \
+            --output none
+    fi
+fi
+
 # Get the app URL
 APP_URL=$(az containerapp show \
     --resource-group "$RESOURCE_GROUP" \
