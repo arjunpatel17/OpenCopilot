@@ -50,6 +50,24 @@ COPY workspace/.copilot/ /workspace/.copilot/
 RUN if [ -f /workspace/tools/job-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/job-scanner/requirements.txt; fi
 RUN if [ -f /workspace/tools/news-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/news-scanner/requirements.txt; fi
 RUN if [ -f /workspace/tools/sleeper-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/sleeper-scanner/requirements.txt; fi
+RUN if [ -f /workspace/tools/earnings-calendar-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/earnings-calendar-scanner/requirements.txt; fi
+RUN if [ -f /workspace/tools/card-generator/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/card-generator/requirements.txt; fi
+
+# The card-generator tool renders Jinja2 templates to PNG via headless Chromium.
+# Install Chromium + its system libraries (libglib2.0-0, libnss3, libdbus-1-3,
+# etc.) at build time as root so the non-root `appuser` can launch the browser
+# at runtime without needing sudo. PLAYWRIGHT_BROWSERS_PATH puts the browser
+# binaries in a world-readable location instead of /root/.cache.
+#
+# Without this step, card-generator silently falls back to a Pillow-based
+# renderer that's hardcoded to a subset of card types — visibly fewer cards
+# get produced than the cards-config declares.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+RUN if [ -f /workspace/tools/card-generator/requirements.txt ]; then \
+        mkdir -p /opt/playwright && \
+        playwright install --with-deps chromium && \
+        chmod -R a+rX /opt/playwright ; \
+    fi
 
 # gh auth: at runtime, GH_TOKEN env var will authenticate automatically
 # Create a gh wrapper that uses GH_REPO_TOKEN for repo operations
