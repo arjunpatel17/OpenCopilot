@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_allowed_users: list[str] = []  # Telegram usernames allowed (empty = allow all)
     telegram_webhook_secret: str = ""
+    # Streaming-output verbosity for tool events shown in the chat.
+    #   "verbose" — show every ⚡ tool event (legacy behavior; can trigger Telegram flood limits on long agent runs)
+    #   "brief"   — show only high-signal events (task, report_intent, create, agent, edit) — default
+    #   "silent"  — drop every ⚡ tool event from the chat (only the final narrative is shown)
+    # Tool events are always retained in history and server logs regardless of this setting.
+    telegram_tool_verbosity: str = "brief"
 
     # OpenAI API key (used for Whisper voice transcription)
     openai_api_key: str = ""

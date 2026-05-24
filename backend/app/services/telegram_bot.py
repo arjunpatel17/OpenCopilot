@@ -1,11 +1,13 @@
 import asyncio
 import logging
 import re
+import time
 import httpx
 from collections import deque
 from pathlib import Path
 from telegram import Update, Bot
 from telegram.constants import ChatAction
+from telegram.error import RetryAfter, TimedOut, NetworkError
 from app.services import copilot
 from app.services.copilot import TOOL_EVENT_PREFIX
 from app.config import settings
@@ -15,6 +17,142 @@ logger.setLevel(logging.DEBUG)
 
 AGENT_CMD_PREFIX = "/agent "
 MODEL_FLAG_RE = re.compile(r'--model\s+(\S+)')
+
+# ---------------------------------------------------------------------------
+#  Telegram flood-control protection
+# ---------------------------------------------------------------------------
+#
+# Long agent runs (esp. the stocks-social-media agent running across 10+
+# tickers with nested sub-agents) emit hundreds of tool events. Each time
+# the streamed response_text overflows Telegram's 4096-char limit, the
+# streaming loop creates a NEW message via bot.send_message(...). Many
+# back-to-back send_message calls trip Telegram's per-chat rate limit
+# (~1 msg/sec sustained) and the API returns RetryAfter.
+#
+# To stay below the limit and to recover gracefully when we hit it anyway,
+# every send and edit inside the long-running streaming path goes through
+# the two helpers below. They:
+#   1. Enforce a minimum gap between new-message creations per chat.
+#   2. Catch RetryAfter (and the transient TimedOut/NetworkError), sleep
+#      `e.retry_after + 1` seconds, retry once, and swallow on second
+#      failure so a single missed update never kills the agent stream.
+# ---------------------------------------------------------------------------
+
+_chat_last_send_ts: dict[int, float] = {}
+# 0.5s gap keeps us well under Telegram's ~1 msg/sec sustained limit while
+# still feeling responsive to the user.
+_MIN_SEND_GAP_SEC = 0.5
+# Cap retries so a persistently-throttled chat doesn't queue forever.
+_MAX_RETRY_WAIT_SEC = 60
+
+# Tool events shown in chat when telegram_tool_verbosity == "brief".
+# Everything else is dropped from the chat (still kept in history + logs).
+# Pick high-signal events that map to user-visible progress.
+_BRIEF_TOOL_NAMES = {
+    "task",          # sub-agent invocation
+    "report_intent", # high-level action description from the agent
+    "create",        # new file created
+    "agent",         # nested agent run
+    "edit",          # existing file modified
+}
+
+
+def _should_show_tool_event(tool_name: str) -> bool:
+    """Decide whether a `⚡ {tool_name}` line should be rendered in the chat."""
+    verbosity = (settings.telegram_tool_verbosity or "brief").lower()
+    if verbosity == "verbose":
+        return True
+    if verbosity == "silent":
+        return False
+    # Default "brief".
+    return tool_name in _BRIEF_TOOL_NAMES
+
+
+async def _send_safe(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    **kwargs,
+):
+    """Throttled bot.send_message with RetryAfter handling.
+
+    Enforces _MIN_SEND_GAP_SEC between new messages to the same chat and
+    transparently waits + retries once on RetryAfter. Returns the Telegram
+    Message object on success, None on any failure (failures are logged,
+    never re-raised).
+    """
+    # Throttle: wait until at least _MIN_SEND_GAP_SEC has elapsed since the
+    # last successful send to this chat.
+    last = _chat_last_send_ts.get(chat_id, 0.0)
+    gap = time.monotonic() - last
+    if gap < _MIN_SEND_GAP_SEC:
+        await asyncio.sleep(_MIN_SEND_GAP_SEC - gap)
+
+    try:
+        msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+        _chat_last_send_ts[chat_id] = time.monotonic()
+        return msg
+    except RetryAfter as e:
+        wait = min(float(e.retry_after) + 1.0, _MAX_RETRY_WAIT_SEC)
+        logger.warning(
+            "Telegram RetryAfter %.1fs on send to chat %s; pausing",
+            wait, chat_id,
+        )
+        await asyncio.sleep(wait)
+        try:
+            msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            _chat_last_send_ts[chat_id] = time.monotonic()
+            return msg
+        except Exception as e2:
+            logger.error(
+                "Telegram send_message still failing after RetryAfter retry: %s", e2
+            )
+            return None
+    except (TimedOut, NetworkError) as e:
+        logger.warning("Telegram network error on send to chat %s: %s", chat_id, e)
+        return None
+    except Exception as e:
+        logger.warning("Telegram send_message unexpected error for chat %s: %s", chat_id, e)
+        return None
+
+
+async def _edit_safe(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    **kwargs,
+) -> None:
+    """bot.edit_message_text with RetryAfter handling.
+
+    Failures (including the common "message is not modified" no-op edit
+    error) are logged at debug and never re-raised, so the streaming loop
+    cannot be killed by a transient Telegram error.
+    """
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id, message_id=message_id, text=text, **kwargs
+        )
+        return
+    except RetryAfter as e:
+        wait = min(float(e.retry_after) + 1.0, _MAX_RETRY_WAIT_SEC)
+        logger.warning(
+            "Telegram RetryAfter %.1fs on edit in chat %s; pausing",
+            wait, chat_id,
+        )
+        await asyncio.sleep(wait)
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id, message_id=message_id, text=text, **kwargs
+            )
+        except Exception:
+            pass
+    except (TimedOut, NetworkError) as e:
+        logger.debug("Telegram network error on edit in chat %s: %s", chat_id, e)
+    except Exception:
+        # edit_message_text raises 'message is not modified' when the text
+        # hasn't changed; that's an expected no-op for our streaming loop.
+        pass
 
 
 def _escape_md(text: str) -> str:
@@ -688,11 +826,20 @@ async def _handle_telegram_message_locked(update_data: dict, chat_id: int) -> No
             if chunk.strip().startswith(TOOL_EVENT_PREFIX):
                 marker = chunk.strip()[len(TOOL_EVENT_PREFIX):]
                 parts = marker.split("|", 1)
+                tool_name = parts[0]
                 desc = parts[1] if len(parts) > 1 else parts[0]
                 tool_line = f"⚡ {desc}\n"
+                # Always keep tool events in the in-memory transcript and
+                # outbound history so logs / sessions / debugging stay complete.
                 full_response_parts.append(tool_line)
-                response_text += tool_line
-                # fall through to the edit logic below
+                # Only stream the event back to the user if it survives the
+                # verbosity filter — dropping low-signal events is the single
+                # biggest reduction in Telegram message volume for long runs
+                # and the primary defense against "Flood control exceeded".
+                if _should_show_tool_event(tool_name):
+                    response_text += tool_line
+                else:
+                    continue
             else:
                 # Skip bare turn separators
                 if chunk.strip() == '---':
@@ -706,14 +853,12 @@ async def _handle_telegram_message_locked(update_data: dict, chat_id: int) -> No
             if len(response_text) > TG_MSG_LIMIT - 100:
                 cleaned = _clean_output(response_text[:TG_MSG_LIMIT])
                 if response_msg and cleaned.strip():
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=response_msg.message_id,
-                            text=cleaned[:TG_MSG_LIMIT],
-                        )
-                    except Exception:
-                        pass
+                    await _edit_safe(
+                        bot,
+                        chat_id,
+                        response_msg.message_id,
+                        cleaned[:TG_MSG_LIMIT],
+                    )
                     overflow_msgs.append(response_msg)
                 # Start fresh message for the overflow
                 response_msg = None
@@ -724,19 +869,17 @@ async def _handle_telegram_message_locked(update_data: dict, chat_id: int) -> No
                 cleaned = _clean_output(response_text)
                 if cleaned.strip():
                     if response_msg is None:
-                        # Create the first response message
-                        response_msg = await bot.send_message(
-                            chat_id=chat_id, text=cleaned[:TG_MSG_LIMIT]
+                        # Create the first response message (throttled + RetryAfter-safe).
+                        response_msg = await _send_safe(
+                            bot, chat_id, cleaned[:TG_MSG_LIMIT]
                         )
                     else:
-                        try:
-                            await bot.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=response_msg.message_id,
-                                text=cleaned[:TG_MSG_LIMIT],
-                            )
-                        except Exception:
-                            pass  # edit fails if text hasn't changed
+                        await _edit_safe(
+                            bot,
+                            chat_id,
+                            response_msg.message_id,
+                            cleaned[:TG_MSG_LIMIT],
+                        )
                     last_edit_time = now
 
         logger.warning("Copilot stream ended for chat %s", chat_id,
@@ -748,23 +891,21 @@ async def _handle_telegram_message_locked(update_data: dict, chat_id: int) -> No
             if cleaned.strip():
                 for msg_chunk in _split_message(cleaned):
                     if response_msg is None:
-                        response_msg = await bot.send_message(
-                            chat_id=chat_id, text=msg_chunk
+                        response_msg = await _send_safe(
+                            bot, chat_id, msg_chunk
                         )
                     else:
-                        try:
-                            await bot.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=response_msg.message_id,
-                                text=msg_chunk,
-                            )
-                        except Exception:
-                            pass
+                        await _edit_safe(
+                            bot,
+                            chat_id,
+                            response_msg.message_id,
+                            msg_chunk,
+                        )
                         # If there are more chunks after this, we need new messages
                         response_msg = None
 
         if response_msg is None and not overflow_msgs:
-            await bot.send_message(chat_id=chat_id, text="_(No response from Copilot)_")
+            await _send_safe(bot, chat_id, "_(No response from Copilot)_")
 
         # Record assistant response in history
         full_response = _clean_output("".join(full_response_parts)).strip()
@@ -774,7 +915,7 @@ async def _handle_telegram_message_locked(update_data: dict, chat_id: int) -> No
     except Exception as e:
         logger.exception("Copilot execution failed for chat %s", chat_id,
                          extra={"chat_id": chat_id, "agent_name": agent_name})
-        await bot.send_message(chat_id=chat_id, text=f"❌ Error: {e}")
+        await _send_safe(bot, chat_id, f"❌ Error: {e}")
     finally:
         stop_typing.set()
         typing_task.cancel()
