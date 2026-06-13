@@ -43,11 +43,11 @@ echo "    Image built: $ACR_NAME.azurecr.io/${IMAGE_NAME}:latest"
 
 # Step 2: Update the container app to use the new image (force new revision)
 echo ">>> Step 2/3: Updating container app..."
-# Suffix combines epoch seconds + a short random hex; pure-epoch suffixes
-# collide if update.sh is re-run in the same second (Azure rejects with
-# "revision with suffix ... already exists" and aborts the rest of the
-# script, leaving scale config un-reapplied).
-REV_SUFFIX="deploy-$(date +%s)-$(openssl rand -hex 3)"
+# Use uuidgen to guarantee uniqueness even if update.sh is re-run within
+# the same epoch second. Previous epoch-only and epoch+`openssl rand -hex 3`
+# suffixes have both collided in practice, aborting the script before the
+# scale-config re-apply step runs (cooldownPeriod stuck at 300s default).
+REV_SUFFIX="deploy-$(date +%s)-$(uuidgen 2>/dev/null | tr 'A-Z' 'a-z' | cut -c1-8 || openssl rand -hex 4)"
 az containerapp update \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_APP_NAME" \
