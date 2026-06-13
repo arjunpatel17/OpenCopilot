@@ -167,14 +167,16 @@ if [[ -n "$FINNHUB_API_KEY" ]]; then
         --output none
 fi
 
-# Set a longer scale cooldown (30 min) so long-running agent tasks over
-# WebSocket don't get killed by a premature scale-to-zero.
+# Set a longer scale cooldown (20 min) so long-running agent tasks (e.g.
+# stocks-social-media) don't get killed by a premature scale-to-zero. The
+# previous default of 5 min was killing in-flight agent runs around the
+# 5-min mark via KEDAScaleTargetDeactivated.
 SCALE_YAML=$(mktemp)
 cat > "$SCALE_YAML" <<EOF
 properties:
   template:
     scale:
-      cooldownPeriod: 1800
+      cooldownPeriod: 1200
       minReplicas: 0
       maxReplicas: 1
 EOF

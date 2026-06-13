@@ -95,6 +95,26 @@ if [[ -f "$ENV_FILE_FOR_KEYS" ]]; then
     fi
 fi
 
+# Step 2c: Re-apply scale config. `az containerapp update --image` resets
+# scale settings to defaults, which would drop cooldownPeriod back to 300s
+# and let KEDA kill in-flight agent runs at the 5-min mark. Keep this in
+# sync with the scale block in deploy.sh.
+SCALE_YAML=$(mktemp)
+cat > "$SCALE_YAML" <<EOF
+properties:
+  template:
+    scale:
+      cooldownPeriod: 1200
+      minReplicas: 0
+      maxReplicas: 1
+EOF
+az containerapp update \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CONTAINER_APP_NAME" \
+    --yaml "$SCALE_YAML" \
+    --output none
+rm -f "$SCALE_YAML"
+
 # Get the app URL
 APP_URL=$(az containerapp show \
     --resource-group "$RESOURCE_GROUP" \
