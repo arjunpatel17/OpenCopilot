@@ -43,11 +43,16 @@ echo "    Image built: $ACR_NAME.azurecr.io/${IMAGE_NAME}:latest"
 
 # Step 2: Update the container app to use the new image (force new revision)
 echo ">>> Step 2/3: Updating container app..."
+# Suffix combines epoch seconds + a short random hex; pure-epoch suffixes
+# collide if update.sh is re-run in the same second (Azure rejects with
+# "revision with suffix ... already exists" and aborts the rest of the
+# script, leaving scale config un-reapplied).
+REV_SUFFIX="deploy-$(date +%s)-$(openssl rand -hex 3)"
 az containerapp update \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_APP_NAME" \
     --image "$ACR_NAME.azurecr.io/${IMAGE_NAME}:latest" \
-    --revision-suffix "deploy-$(date +%s)" \
+    --revision-suffix "$REV_SUFFIX" \
     --output none
 
 # Step 2a: Refresh GH tokens from gh CLI so a re-auth on the host flows to
