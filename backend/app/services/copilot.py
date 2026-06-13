@@ -100,8 +100,25 @@ def ensure_workspace_dirs():
 
 
 
-def _summarize_tool_call(tool_name: str, arguments: dict) -> str:
-    """Create a human-readable summary of a tool call from its name and arguments."""
+def _summarize_tool_call(tool_name: str, arguments) -> str:
+    """Create a human-readable summary of a tool call from its name and arguments.
+
+    `arguments` is usually a dict, but some MCP/agent tool events emit it as
+    a string (JSON-encoded or freeform) or null. Coerce to a dict-like view
+    before any `.get(...)` so a malformed event can't crash the stream reader
+    mid-run.
+    """
+    if not isinstance(arguments, dict):
+        # String form: best-effort JSON parse, else show raw string.
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+                arguments = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                short = arguments.strip().split("\n")[0][:60]
+                return f"{tool_name}: {short}" if short else tool_name
+        else:
+            arguments = {}
     if tool_name == "report_intent":
         return arguments.get("intent", "Planning")
     if tool_name == "bash" or tool_name == "shell":
