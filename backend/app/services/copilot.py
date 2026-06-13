@@ -251,6 +251,15 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
     assert process.stdout is not None
     assert process.stderr is not None
 
+    # Termination instrumentation — populated so the `finally` block can log
+    # exactly *why* the stream ended (clean CLI result, stdout EOF, app-side
+    # idle-kill, session.error, exception). Critical for diagnosing the
+    # ~10-min cutoff in long agent runs.
+    exit_reason = "unknown"
+    delta_count = 0
+    tool_count = 0
+    last_event_type: str | None = None
+
     try:
         buffer = ""
         no_output_cycles = 0
@@ -262,9 +271,11 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
                 chunk = await asyncio.wait_for(process.stdout.read(4096), timeout=15)
             except asyncio.TimeoutError:
                 if process.returncode is not None:
+                    exit_reason = "process_exited_during_idle"
                     break
                 no_output_cycles += 1
                 if no_output_cycles >= max_no_output:
+                    exit_reason = "app_idle_timeout_kill"
                     process.kill()
                     if got_any_delta:
                         break
@@ -273,6 +284,7 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
                 continue
 
             if not chunk:
+                exit_reason = "stdout_eof"
                 break
 
             no_output_cycles = 0
@@ -289,10 +301,12 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
                     continue
 
                 event_type = event.get("type", "")
+                last_event_type = event_type
 
                 if event_type == "session.error":
                     error_msg = event.get("data", {}).get("message", "Unknown error")
                     logger.error("Copilot session error: %s", error_msg)
+                    exit_reason = "session_error"
                     yield f"\n[Error]: {error_msg}"
                     process.kill()
                     return
@@ -301,12 +315,14 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
                     delta = event.get("data", {}).get("deltaContent", "")
                     if delta:
                         got_any_delta = True
+                        delta_count += 1
                         _emit_log({"type": "text_delta", "content": delta})
                         yield delta
 
                 elif event_type == "tool.execution_start":
                     tool_name = event.get("data", {}).get("toolName", "")
                     if tool_name:
+                        tool_count += 1
                         desc = _summarize_tool_call(tool_name, event.get("data", {}).get("arguments", {}))
                         _emit_log({"type": "tool_start", "tool": tool_name, "description": desc})
                         yield f"{TOOL_EVENT_PREFIX}{tool_name}|{desc}\n"
@@ -317,6 +333,15 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
                         yield "\n---\n"
 
                 elif event_type == "result":
+                    exit_reason = "cli_result_event"
+                    result_data = event.get("data", {}) or {}
+                    logger.info(
+                        "Copilot CLI emitted result event",
+                        extra={
+                            "result_keys": list(result_data.keys()),
+                            "result_preview": json.dumps(result_data)[:500],
+                        },
+                    )
                     process.kill()
                     return
 
@@ -329,14 +354,39 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
                 yield "[Error]: No response received from Copilot CLI."
 
     except Exception as e:
+        exit_reason = f"exception:{type(e).__name__}"
+        logger.exception("Copilot stream reader raised")
         yield f"[Error]: {e}"
     finally:
+        # Always drain stderr so we can see any final CLI message — previously
+        # only happened when zero deltas were streamed, which silently hid
+        # crashes/limits that occurred mid-stream.
+        stderr_tail = ""
+        try:
+            if process.stderr is not None:
+                stderr_bytes = await asyncio.wait_for(process.stderr.read(), timeout=2)
+                stderr_tail = stderr_bytes.decode("utf-8", errors="replace").strip()
+        except Exception:
+            pass
+
         if process.returncode is None:
             process.kill()
         try:
             await asyncio.wait_for(process.wait(), timeout=5)
         except Exception:
             pass
+
+        logger.info(
+            "Copilot stream reader exit",
+            extra={
+                "exit_reason": exit_reason,
+                "returncode": process.returncode,
+                "delta_count": delta_count,
+                "tool_count": tool_count,
+                "last_event_type": last_event_type,
+                "stderr_tail": stderr_tail[-2000:] if stderr_tail else "",
+            },
+        )
 
 
 # ========== CLI introspection helpers ==========
