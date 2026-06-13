@@ -179,7 +179,18 @@ async def run_code_chat(prompt: str, agent_name: str | None = None, *, model_nam
         return
 
     model = model_name or settings.copilot_model
-    args = [copilot_path, "--output-format", "json", "--allow-all"]
+    # `--max-autopilot-continues` defaults to 5 in the copilot CLI; without
+    # raising it, long agent runs (e.g. stocks-social-media iterating across
+    # several tickers) hit the cap and the CLI emits a clean `result` event
+    # mid-task around the 10-minute mark. 200 leaves ample headroom while
+    # still preventing a runaway loop.
+    args = [
+        copilot_path,
+        "--output-format", "json",
+        "--allow-all",
+        "--mode", "autopilot",
+        "--max-autopilot-continues", "200",
+    ]
     if agent_name:
         args.extend(["--agent", agent_name])
     if model:
@@ -219,7 +230,13 @@ async def run_plan_mode(prompt: str, agent_name: str | None = None, *, model_nam
         return
 
     model = model_name or settings.copilot_model
-    args = [copilot_path, "--output-format", "json", "--allow-all"]
+    args = [
+        copilot_path,
+        "--output-format", "json",
+        "--allow-all",
+        "--mode", "autopilot",
+        "--max-autopilot-continues", "200",
+    ]
     for tool in PLAN_MODE_TOOLS:
         args.extend(["--available-tools", tool])
     if agent_name:
