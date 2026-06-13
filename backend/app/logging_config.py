@@ -41,7 +41,11 @@ class JSONFormatter(logging.Formatter):
         # Add extra fields passed via logger.info("msg", extra={...})
         for key in ("chat_id", "agent_name", "model", "session_id",
                      "duration_ms", "status_code", "method", "path",
-                     "user", "error_type"):
+                     "user", "error_type",
+                     # Copilot subprocess stream diagnostics
+                     "exit_reason", "returncode", "delta_count", "tool_count",
+                     "last_event_type", "stderr_tail",
+                     "result_keys", "result_preview"):
             val = getattr(record, key, None)
             if val is not None:
                 log_entry[key] = val

@@ -75,6 +75,19 @@ def _find_cli(name: str) -> str | None:
     return shutil.which(name)
 
 
+def _safe_kill(process) -> None:
+    """Kill a subprocess if still alive; swallow ProcessLookupError race when
+    the process has already exited (common after a CLI 'result' event)."""
+    if process.returncode is not None:
+        return
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+    except Exception as e:
+        logger.debug("safe_kill suppressed %s", e)
+
+
 def ensure_workspace_dirs():
     """Ensure standard workspace directories exist."""
     workspace = Path(settings.workspace_dir)
@@ -276,7 +289,7 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
                 no_output_cycles += 1
                 if no_output_cycles >= max_no_output:
                     exit_reason = "app_idle_timeout_kill"
-                    process.kill()
+                    _safe_kill(process)
                     if got_any_delta:
                         break
                     yield "\n[Error]: Command timed out."
@@ -308,7 +321,7 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
                     logger.error("Copilot session error: %s", error_msg)
                     exit_reason = "session_error"
                     yield f"\n[Error]: {error_msg}"
-                    process.kill()
+                    _safe_kill(process)
                     return
 
                 if event_type == "assistant.message_delta":
@@ -342,7 +355,7 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
                             "result_preview": json.dumps(result_data)[:500],
                         },
                     )
-                    process.kill()
+                    _safe_kill(process)
                     return
 
         if not got_any_delta:
@@ -370,7 +383,7 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
             pass
 
         if process.returncode is None:
-            process.kill()
+            _safe_kill(process)
         try:
             await asyncio.wait_for(process.wait(), timeout=5)
         except Exception:
