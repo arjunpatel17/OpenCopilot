@@ -9,7 +9,13 @@ set -euo pipefail
 # ---------- Configuration ----------
 RESOURCE_GROUP="opencopilot-rg"
 LOCATION="eastus"
-ACR_NAME="opencopilotacr$(openssl rand -hex 3)"  # must be globally unique
+# Reuse the existing ACR in the resource group if one is already there;
+# only mint a new globally-unique name on the very first deploy. Without
+# this, every re-run of deploy.sh leaves behind another Basic ACR at ~$5/mo.
+ACR_NAME=$(az acr list --resource-group "$RESOURCE_GROUP" --query "[0].name" -o tsv 2>/dev/null || true)
+if [[ -z "$ACR_NAME" ]]; then
+    ACR_NAME="opencopilotacr$(openssl rand -hex 3)"
+fi
 CONTAINER_APP_NAME="opencopilot"
 CONTAINER_ENV_NAME="opencopilot-env"
 IMAGE_NAME="opencopilot"
