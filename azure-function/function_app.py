@@ -118,7 +118,7 @@ def cron_trigger(timer: func.TimerRequest) -> None:
                     run_resp = client.post(
                         f"{base_url}/api/cron/run/{job_id}",
                         headers=headers,
-                        timeout=300,
+                        timeout=900,
                     )
                     run_resp.raise_for_status()
                     result = run_resp.json()

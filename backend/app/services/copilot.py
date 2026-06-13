@@ -427,6 +427,7 @@ def get_mcp_servers() -> list[dict]:
 # Default fallback models if CLI discovery fails
 _DEFAULT_MODELS = [
     {"group": "Claude", "models": [
+        {"id": "claude-opus-4.7-1m", "name": "Claude Opus 4.7 (1M context)"},
         {"id": "claude-opus-4.6-1m", "name": "Claude Opus 4.6 (1M context)"},
         {"id": "claude-opus-4.6", "name": "Claude Opus 4.6"},
         {"id": "claude-opus-4.5", "name": "Claude Opus 4.5"},
@@ -436,6 +437,7 @@ _DEFAULT_MODELS = [
         {"id": "claude-haiku-4.5", "name": "Claude Haiku 4.5"},
     ]},
     {"group": "GPT", "models": [
+        {"id": "gpt-5.5", "name": "GPT-5.5"},
         {"id": "gpt-5.4", "name": "GPT-5.4"},
         {"id": "gpt-5.3-codex", "name": "GPT-5.3-Codex"},
         {"id": "gpt-5.2-codex", "name": "GPT-5.2-Codex"},
@@ -450,6 +452,9 @@ _DEFAULT_MODELS = [
     ]},
     {"group": "Gemini", "models": [
         {"id": "gemini-3-pro-preview", "name": "Gemini 3 Pro (Preview)"},
+    ]},
+    {"group": "Microsoft", "models": [
+        {"id": "mai-code-1-flash", "name": "MAI-Code-1-Flash"},
     ]},
 ]
 
@@ -501,6 +506,8 @@ async def discover_models() -> list[dict]:
                         group = "GPT"
                     elif mid.startswith("gemini"):
                         group = "Gemini"
+                    elif mid.startswith("mai"):
+                        group = "Microsoft"
                     elif mid.startswith("o"):
                         group = "OpenAI Reasoning"
                     else:
