@@ -43,17 +43,32 @@ echo "    Image built: $ACR_NAME.azurecr.io/${IMAGE_NAME}:latest"
 
 # Step 2: Update the container app to use the new image (force new revision)
 echo ">>> Step 2/3: Updating container app..."
-# Use uuidgen to guarantee uniqueness even if update.sh is re-run within
-# the same epoch second. Previous epoch-only and epoch+`openssl rand -hex 3`
-# suffixes have both collided in practice, aborting the script before the
-# scale-config re-apply step runs (cooldownPeriod stuck at 300s default).
+# Use uuidgen for the suffix. Even with a unique suffix, `az containerapp
+# update` occasionally returns 'revision with suffix ... already exists'
+# *after* successfully creating the revision (looks like an internal retry
+# in the CLI colliding with its own first attempt). Verify the rollout
+# ourselves after the call and treat the spurious error as success when
+# the suffix shows up in the revision list.
 REV_SUFFIX="deploy-$(date +%s)-$(uuidgen 2>/dev/null | tr 'A-Z' 'a-z' | cut -c1-8 || openssl rand -hex 4)"
-az containerapp update \
+UPDATE_OUT=$(az containerapp update \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_APP_NAME" \
     --image "$ACR_NAME.azurecr.io/${IMAGE_NAME}:latest" \
     --revision-suffix "$REV_SUFFIX" \
-    --output none
+    --output none 2>&1) || {
+    # Confirm whether the revision was actually created despite the error.
+    if az containerapp revision show \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$CONTAINER_APP_NAME" \
+        --revision "${CONTAINER_APP_NAME}--${REV_SUFFIX}" \
+        --query "name" -o tsv >/dev/null 2>&1; then
+        echo "    (CLI returned an error but revision $REV_SUFFIX is live; continuing)"
+    else
+        echo "    az containerapp update failed:"
+        echo "$UPDATE_OUT"
+        exit 1
+    fi
+}
 
 # Step 2a: Refresh GH tokens from gh CLI so a re-auth on the host flows to
 # Azure on the next update — important because the Copilot LLM lives on
