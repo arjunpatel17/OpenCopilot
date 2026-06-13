@@ -50,7 +50,30 @@ az containerapp update \
     --revision-suffix "deploy-$(date +%s)" \
     --output none
 
-# Step 2a: Re-apply optional API keys from backend/.env so a rotated or
+# Step 2a: Refresh GH tokens from gh CLI so a re-auth on the host flows to
+# Azure on the next update — important because the Copilot LLM lives on
+# arjun-d-patel and tokens rotate. GH_REPO_TOKEN (arjunpatel17) is used for
+# git operations via the gh wrapper in the Dockerfile.
+GH_TOKEN_LATEST=$(gh auth token --user arjun-d-patel 2>/dev/null || true)
+GH_REPO_TOKEN_LATEST=$(gh auth token --user arjunpatel17 2>/dev/null || true)
+if [[ -n "$GH_TOKEN_LATEST" ]]; then
+    echo "    Syncing GH_TOKEN (arjun-d-patel) for Copilot LLM..."
+    az containerapp secret set \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$CONTAINER_APP_NAME" \
+        --secrets "gh-token=$GH_TOKEN_LATEST" \
+        --output none
+fi
+if [[ -n "$GH_REPO_TOKEN_LATEST" ]]; then
+    echo "    Syncing GH_REPO_TOKEN (arjunpatel17) for git ops..."
+    az containerapp secret set \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$CONTAINER_APP_NAME" \
+        --secrets "gh-repo-token=$GH_REPO_TOKEN_LATEST" \
+        --output none
+fi
+
+# Step 2b: Re-apply optional API keys from backend/.env so a rotated or
 # newly-added key flows to Azure on the next update — no need to re-run deploy.sh.
 # Mirrors the wiring step in deploy.sh.
 ENV_FILE_FOR_KEYS="$(dirname "$0")/backend/.env"
