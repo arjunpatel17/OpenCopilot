@@ -77,12 +77,20 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
         for rel_path in sorted(new_files):
             fp = workspace / rel_path
             try:
-                attachments.append((rel_path, fp.read_text(encoding="utf-8")))
-            except (UnicodeDecodeError, ValueError):
+                # Try reading as text first
                 try:
-                    attachments.append((rel_path, fp.read_bytes()))
-                except Exception:
-                    logger.warning("Could not read generated file for attachment: %s", rel_path)
+                    content = fp.read_text(encoding="utf-8")
+                    attachments.append((rel_path, content))
+                except (UnicodeDecodeError, ValueError):
+                    # Fall back to binary
+                    content = fp.read_bytes()
+                    # Skip attachments that are too large (> 25MB) to avoid email size limits
+                    if len(content) > 25 * 1024 * 1024:
+                        logger.warning("Skipping generated file (too large): %s", rel_path)
+                        continue
+                    attachments.append((rel_path, content))
+            except Exception as e:
+                logger.warning("Could not read generated file for attachment %s: %s", rel_path, e)
 
     # Update last_run timestamp
     cron_store.update_last_run(job.id)

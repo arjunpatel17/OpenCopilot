@@ -58,17 +58,36 @@ def send_result_email(
         if attachments:
             email_attachments = []
             for filename, content in attachments:
-                if isinstance(content, str):
-                    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
-                else:
-                    encoded = base64.b64encode(content).decode("ascii")
-                content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-                email_attachments.append({
-                    "name": PurePosixPath(filename).name,
-                    "contentType": content_type,
-                    "contentInBase64": encoded,
-                })
-            message["attachments"] = email_attachments
+                try:
+                    # Ensure content is bytes before base64 encoding
+                    if isinstance(content, str):
+                        content_bytes = content.encode("utf-8")
+                    else:
+                        content_bytes = content
+                    
+                    # Verify base64 encoding worked
+                    encoded = base64.b64encode(content_bytes).decode("ascii")
+                    if not encoded:
+                        logger.warning("Failed to encode attachment %s: empty base64 result", filename)
+                        continue
+                    
+                    # Sanitize filename to contain only safe characters
+                    safe_filename = PurePosixPath(filename).name
+                    # Remove any non-alphanumeric chars except dots, hyphens, underscores
+                    safe_filename = "".join(c if c.isalnum() or c in ".-_" else "_" for c in safe_filename)
+                    
+                    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                    email_attachments.append({
+                        "name": safe_filename,
+                        "contentType": content_type,
+                        "contentInBase64": encoded,
+                    })
+                except Exception as attach_err:
+                    logger.warning("Failed to encode attachment %s: %s", filename, attach_err)
+                    continue
+            
+            if email_attachments:
+                message["attachments"] = email_attachments
 
         poller = client.begin_send(message)
         result = poller.result()
