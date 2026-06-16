@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = []
 
     # Copilot model (empty string = use CLI default)
-    copilot_model: str = "claude-opus-4.7-1m-internal"
+    copilot_model: str = "claude-opus-4.7"
 
     # Auth toggle (disable for local dev)
     auth_enabled: bool = False

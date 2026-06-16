@@ -21,6 +21,10 @@ CONTAINER_ENV_NAME="opencopilot-env"
 IMAGE_NAME="opencopilot"
 STORAGE_ACCOUNT_NAME="opencopilotsa$(openssl rand -hex 3)"
 STORAGE_CONTAINER="copilot-files"
+# Copilot LLM model used for agent runs. Must be a model available to the
+# Copilot CLI for the GH_TOKEN account (see https://api.githubcopilot.com/models).
+# Avoid "-internal" variants — those are gated to GitHub employees only.
+COPILOT_MODEL="claude-opus-4.7"
 
 # GitHub tokens for the container:
 #   GH_TOKEN      — arjun-d-patel (Copilot LLM access)
@@ -149,6 +153,7 @@ az containerapp create \
         "AZURE_STORAGE_CONTAINER=$STORAGE_CONTAINER" \
         "WORKSPACE_DIR=/workspace" \
         "AUTH_ENABLED=false" \
+        "COPILOT_MODEL=$COPILOT_MODEL" \
     --secrets \
         "gh-token=$GH_TOKEN" \
         "gh-repo-token=$GH_REPO_TOKEN" \

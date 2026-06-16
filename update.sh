@@ -10,6 +10,10 @@ RESOURCE_GROUP="opencopilot-rg"
 CONTAINER_APP_NAME="opencopilot"
 IMAGE_NAME="opencopilot"
 FUNC_APP_NAME="opencopilot-cron"
+# Copilot LLM model used for agent runs. Must be a model available to the
+# Copilot CLI for the GH_TOKEN account (see https://api.githubcopilot.com/models).
+# Avoid "-internal" variants — those are gated to GitHub employees only.
+COPILOT_MODEL="claude-opus-4.7"
 
 # Auto-detect ACR name from the running container app
 echo ">>> Detecting current deployment..."
@@ -114,6 +118,15 @@ if [[ -f "$ENV_FILE_FOR_KEYS" ]]; then
             --output none
     fi
 fi
+
+# Step 2b-model: Ensure COPILOT_MODEL env var matches the configured model so
+# agent runs don't fall back to an unavailable default. Keep in sync with deploy.sh.
+echo "    Syncing COPILOT_MODEL ($COPILOT_MODEL)..."
+az containerapp update \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CONTAINER_APP_NAME" \
+    --set-env-vars "COPILOT_MODEL=$COPILOT_MODEL" \
+    --output none
 
 # Step 2c: Re-apply scale config. `az containerapp update --image` resets
 # scale settings to defaults, which would drop cooldownPeriod back to 300s
