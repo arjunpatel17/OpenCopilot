@@ -524,6 +524,8 @@ def get_mcp_servers() -> list[dict]:
 # Default fallback models if CLI discovery fails
 _DEFAULT_MODELS = [
     {"group": "Claude", "models": [
+        {"id": "claude-opus-4.8", "name": "Claude Opus 4.8"},
+        {"id": "claude-opus-4.8-1m", "name": "Claude Opus 4.8 (1M context)"},
         {"id": "claude-opus-4.7", "name": "Claude Opus 4.7"},
         {"id": "claude-opus-4.7-1m-internal", "name": "Claude Opus 4.7 (1M context)(Internal only)"},
         {"id": "claude-opus-4.7-high", "name": "Claude Opus 4.7 (High reasoning)(Internal only)"},

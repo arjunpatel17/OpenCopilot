@@ -24,7 +24,7 @@ STORAGE_CONTAINER="copilot-files"
 # Copilot LLM model used for agent runs. Must be a model available to the
 # Copilot CLI for the GH_TOKEN account (see https://api.githubcopilot.com/models).
 # Avoid "-internal" variants — those are gated to GitHub employees only.
-COPILOT_MODEL="claude-opus-4.7"
+COPILOT_MODEL="claude-opus-4.8-1m"
 
 # GitHub tokens for the container:
 #   GH_TOKEN      — arjun-d-patel (Copilot LLM access)
