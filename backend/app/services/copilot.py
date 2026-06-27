@@ -180,6 +180,29 @@ def _prepend_history(prompt: str, history: str | None) -> str:
     )
 
 
+# Suffix used by the UI to request a model's 1M ("long") context window. The
+# Copilot CLI exposes the larger window via `--context long_context` rather than
+# a distinct model id, so we strip this suffix and pass the flag instead. Works
+# for any base model that supports the long-context tier (e.g. Opus 4.7 / 4.8).
+_LONG_CONTEXT_SUFFIX = "-1m"
+_LONG_CONTEXT_TIER = "long_context"
+
+
+def _resolve_model_args(model: str | None) -> list[str]:
+    """Turn a (possibly suffixed) model id into CLI `--model`/`--context` args.
+
+    A trailing `-1m` is a UI convenience meaning "use this model's 1M context
+    window". It is not a real CLI model id, so we map it to the base model plus
+    `--context long_context`.
+    """
+    if not model:
+        return []
+    if model.endswith(_LONG_CONTEXT_SUFFIX):
+        base = model[: -len(_LONG_CONTEXT_SUFFIX)]
+        return ["--model", base, "--context", _LONG_CONTEXT_TIER]
+    return ["--model", model]
+
+
 async def run_code_chat(prompt: str, agent_name: str | None = None, *, model_name: str | None = None, history: str | None = None) -> AsyncIterator[str]:
     """Run a prompt via the standalone `copilot` CLI with structured JSONL output."""
     # Ensure data files are fresh from blob storage before the agent reads them
@@ -210,8 +233,7 @@ async def run_code_chat(prompt: str, agent_name: str | None = None, *, model_nam
     ]
     if agent_name:
         args.extend(["--agent", agent_name])
-    if model:
-        args.extend(["--model", model])
+    args.extend(_resolve_model_args(model))
     args.extend(["-p", prompt])
 
     # Truncate prompt for display
@@ -258,8 +280,7 @@ async def run_plan_mode(prompt: str, agent_name: str | None = None, *, model_nam
         args.extend(["--available-tools", tool])
     if agent_name:
         args.extend(["--agent", agent_name])
-    if model:
-        args.extend(["--model", model])
+    args.extend(_resolve_model_args(model))
     args.extend(["-p", combined])
 
     # Track process for logs
@@ -527,11 +548,8 @@ _DEFAULT_MODELS = [
         {"id": "claude-opus-4.8", "name": "Claude Opus 4.8"},
         {"id": "claude-opus-4.8-1m", "name": "Claude Opus 4.8 (1M context)"},
         {"id": "claude-opus-4.7", "name": "Claude Opus 4.7"},
-        {"id": "claude-opus-4.7-1m-internal", "name": "Claude Opus 4.7 (1M context)(Internal only)"},
-        {"id": "claude-opus-4.7-high", "name": "Claude Opus 4.7 (High reasoning)(Internal only)"},
-        {"id": "claude-opus-4.7-xhigh", "name": "Claude Opus 4.7 (Extra high reasoning)(Internal only)"},
+        {"id": "claude-opus-4.7-1m", "name": "Claude Opus 4.7 (1M context)"},
         {"id": "claude-opus-4.6", "name": "Claude Opus 4.6"},
-        {"id": "claude-opus-4.6-1m", "name": "Claude Opus 4.6 (1M context)(Internal only)"},
         {"id": "claude-opus-4.5", "name": "Claude Opus 4.5"},
         {"id": "claude-sonnet-4.6", "name": "Claude Sonnet 4.6"},
         {"id": "claude-sonnet-4.5", "name": "Claude Sonnet 4.5"},
