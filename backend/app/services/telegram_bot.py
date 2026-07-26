@@ -252,7 +252,7 @@ HELP_TEXT = (
     "`/agent stock\\-analysis AAPL \\-\\-email me@co\\.com`\n\n"
     "*Scheduled Jobs:*\n"
     "`/cron <schedule> <agent> <prompt> [\\-\\-email <addr>]` — Schedule a recurring agent run\n"
-    "`/cron \.\.\. \\-\\-time HH:MM` — Set a specific run time \(UTC\)\n"
+    "`/cron \\.\\.\\. \\-\\-time HH:MM` — Set a specific run time \\(UTC\\)\n"
     "`/crons` — List your scheduled jobs\n"
     "`/uncron <id>` — Delete a scheduled job\n"
     "Schedules: `every 1h`, `every 6h`, `daily`, `weekly`, `weekdays`\n\n"

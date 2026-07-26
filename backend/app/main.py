@@ -1,7 +1,8 @@
+import asyncio
 import logging
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -13,6 +14,48 @@ from app.logging_config import setup_logging, request_id_var
 
 setup_logging(log_level=settings.log_level)
 logger = logging.getLogger(__name__)
+
+
+async def _background_startup() -> None:
+    """Heavy startup work, moved off the request-serving critical path.
+
+    Running blob restore/sync and Copilot model discovery *inside* the lifespan
+    (before ``yield``) blocked uvicorn from reporting "application startup
+    complete", so the server never began accepting connections. With thousands
+    of files in blob storage the restore alone took ~1 minute, which exceeded
+    the Azure Container Apps startup-probe budget — the container was marked
+    unhealthy and killed, then restarted, re-running the same slow startup in an
+    unrecoverable crash loop.
+
+    Doing this work in a background task lets the server bind and pass the
+    startup probe immediately; the workspace files and discovered model list
+    populate shortly after. ``get_models()`` returns the built-in default list
+    until discovery finishes.
+    """
+    # Restore workspace from blob and push deploy-managed files back. These are
+    # synchronous (blocking) I/O calls, so run them in a worker thread to avoid
+    # stalling the event loop.
+    try:
+        from app.services.blob_storage import (
+            restore_workspace_from_storage,
+            sync_workspace_to_storage,
+        )
+        restored = await asyncio.to_thread(restore_workspace_from_storage)
+        if restored:
+            logger.info("Restored %d files from blob storage", restored)
+        synced = await asyncio.to_thread(sync_workspace_to_storage)
+        if synced:
+            logger.info("Synced %d workspace files to blob storage", synced)
+    except Exception:
+        logger.exception("Failed to restore workspace from blob storage")
+
+    # Discover available models from the Copilot CLI (runs an LLM query).
+    try:
+        from app.services.copilot import discover_models
+        models = await discover_models()
+        logger.info("Discovered %d model groups at startup", len(models))
+    except Exception:
+        logger.exception("Model discovery failed at startup, using defaults")
 
 
 @asynccontextmanager
@@ -29,28 +72,14 @@ async def lifespan(app: FastAPI):
             "blob_storage_configured": bool(settings.azure_storage_connection_string),
         },
     )
-    # Startup: restore workspace from blob storage (agents, skills, data files)
-    try:
-        from app.services.blob_storage import restore_workspace_from_storage, sync_workspace_to_storage
-        restored = restore_workspace_from_storage()
-        if restored:
-            logger.info("Restored %d files from blob storage", restored)
-        # Push deploy-managed files (agents, skills, tools, .copilot) to blob
-        # so blob storage always reflects the latest deployed versions
-        synced = sync_workspace_to_storage()
-        if synced:
-            logger.info("Synced %d workspace files to blob storage", synced)
-    except Exception:
-        logger.exception("Failed to restore workspace from blob storage")
-
-    # Startup: discover available models from Copilot CLI
-    try:
-        from app.services.copilot import discover_models
-        models = await discover_models()
-        logger.info("Discovered %d model groups at startup", len(models))
-    except Exception:
-        logger.exception("Model discovery failed at startup, using defaults")
+    # Kick off heavy startup work in the background so the server can bind and
+    # begin serving (and pass the Container Apps startup probe) immediately.
+    startup_task = asyncio.create_task(_background_startup())
     yield
+    # Shutdown: cancel background startup if it's still running.
+    startup_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await startup_task
     logger.info("OpenCopilot shutting down")
 
 
