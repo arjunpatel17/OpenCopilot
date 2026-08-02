@@ -69,36 +69,67 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
     except Exception:
         logger.exception("Failed to sync workspace after cron job %s", job.id)
 
-    # Collect content of any new files created during the run as attachments
+    # For any new files created during the run, prefer linking to the copy in
+    # blob storage over attaching the bytes — Azure Communication Services caps
+    # each email request at 10 MB, so large reports must be sent as links.
+    # Fall back to attaching only when a storage link can't be generated
+    # (e.g. local dev without Azure Storage configured).
+    report_links: list[tuple[str, str]] = []
     attachments: list[tuple[str, str | bytes]] = []
     if workspace.exists():
         after_files = {str(f.relative_to(workspace)) for f in workspace.rglob("*") if f.is_file()}
-        new_files = after_files - before_files
-        for rel_path in sorted(new_files):
+        new_files = sorted(after_files - before_files)
+        for rel_path in new_files:
+            # Only consider files that were actually synced to blob storage.
+            if not blob_storage.is_syncable_path(rel_path):
+                continue
+
+            url = blob_storage.get_blob_sas_url(rel_path)
+            if url:
+                report_links.append((rel_path, url))
+                continue
+
+            # No storage link available — attach the file directly, skipping any
+            # single file too large to ever fit within the ACS request limit.
             fp = workspace / rel_path
             try:
-                # Try reading as text first
+                if fp.stat().st_size > email_service.ACS_MAX_REQUEST_BYTES:
+                    logger.warning("Skipping generated file (too large for email): %s", rel_path)
+                    continue
+                # Try reading as text first, fall back to binary
                 try:
                     content = fp.read_text(encoding="utf-8")
-                    attachments.append((rel_path, content))
                 except (UnicodeDecodeError, ValueError):
-                    # Fall back to binary
                     content = fp.read_bytes()
-                    # Skip attachments that are too large (> 25MB) to avoid email size limits
-                    if len(content) > 25 * 1024 * 1024:
-                        logger.warning("Skipping generated file (too large): %s", rel_path)
-                        continue
-                    attachments.append((rel_path, content))
+                attachments.append((rel_path, content))
             except Exception as e:
                 logger.warning("Could not read generated file for attachment %s: %s", rel_path, e)
 
     # Update last_run timestamp
     cron_store.update_last_run(job.id)
 
+    # Build a section describing the generated report files (links preferred).
+    if report_links:
+        link_lines = [f"- {rel_path}:\n  {url}" for rel_path, url in report_links]
+        files_section = (
+            f"\n\n{'=' * 60}\n"
+            f"Report files ({len(report_links)}) — links valid for "
+            f"{settings.email_link_expiry_days} day(s):\n"
+            + "\n".join(link_lines)
+        )
+    elif attachments:
+        files_section = f"\n\n(See {len(attachments)} attached report file(s).)"
+    else:
+        files_section = ""
+
     # Build email body
     if error:
         subject = f"[OpenCopilot] Cron job failed: {job.agent_name}"
-        body = f"Cron job '{job.agent_name}' (ID: {job.id}) failed.\n\nError: {error}\n\nPrompt: {job.prompt}"
+        body = (
+            f"Cron job '{job.agent_name}' (ID: {job.id}) failed.\n\n"
+            f"Error: {error}\n\nPrompt: {job.prompt}"
+            + files_section
+        )
     else:
         subject = f"[OpenCopilot] {job.agent_name} — scheduled report"
         parts = [
@@ -107,9 +138,7 @@ async def run_job(job_id: str, x_cron_secret: str = Header(...)):
             f"{'=' * 60}\n",
             output,
         ]
-        if attachments:
-            parts.append(f"\n\n(See {len(attachments)} attached report file(s).)")
-        body = "\n".join(parts)
+        body = "\n".join(parts) + files_section
 
     email_sent = False
     email_error = ""

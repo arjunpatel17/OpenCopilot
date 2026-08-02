@@ -1,14 +1,35 @@
 import os
 import mimetypes
+import logging
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from app.config import settings
 from app.models.file import BlobFileInfo, FileTreeNode, FileMetadata
 from io import BytesIO
 import zipfile
 
+logger = logging.getLogger(__name__)
+
 # ---------- backend selection ----------
 _use_azure = bool(settings.azure_storage_connection_string)
+
+
+def is_syncable_path(rel_path: str) -> bool:
+    """Return True if a workspace-relative path is eligible for blob storage.
+
+    Single source of truth shared by ``sync_workspace_to_storage`` and any
+    caller that needs to link to synced files (e.g. cron report links). Skips
+    hidden directories (except ``.github``/``.copilot``), ``__pycache__``,
+    and the ``sessions/`` prefix.
+    """
+    parts = Path(rel_path).parts
+    if not parts:
+        return False
+    if any((p.startswith(".") and p not in (".github", ".copilot")) or p == "__pycache__" for p in parts):
+        return False
+    if parts[0] == "sessions":
+        return False
+    return True
 
 
 # ========== Local filesystem backend ==========
@@ -279,18 +300,64 @@ def sync_workspace_to_storage() -> int:
         if not fp.is_file():
             continue
         rel = fp.relative_to(workspace)
-        parts = rel.parts
-        # Skip hidden dirs (except .github and .copilot), sessions, and __pycache__
-        if any((p.startswith(".") and p not in (".github", ".copilot")) or p == "__pycache__" for p in parts):
-            continue
-        if parts[0] == "sessions":
-            continue
         rel_str = str(rel)
+        # Skip hidden dirs (except .github and .copilot), sessions, and __pycache__
+        if not is_syncable_path(rel_str):
+            continue
         ct = mimetypes.guess_type(fp.name)[0] or "application/octet-stream"
         data = fp.read_bytes()
         _azure_upload_blob(rel_str, data, ct)
         count += 1
     return count
+
+
+def get_blob_sas_url(blob_path: str, expiry_days: int | None = None) -> str | None:
+    """Generate a time-limited, read-only SAS URL for a blob.
+
+    Used to link to report files from cron emails instead of attaching them
+    (Azure Communication Services caps email requests at 10 MB). Returns None
+    when Azure Storage isn't configured or a shared-key SAS can't be produced
+    (e.g. local dev, or a SAS/identity-based connection string) so callers can
+    fall back to attaching the file.
+
+    Args:
+        blob_path: Workspace-relative path of the blob (same value used as the
+            blob name when syncing).
+        expiry_days: How long the link stays valid. Defaults to the
+            ``email_link_expiry_days`` setting.
+    """
+    if not _use_azure:
+        return None
+
+    days = expiry_days if expiry_days is not None else settings.email_link_expiry_days
+    try:
+        from azure.storage.blob import (
+            BlobServiceClient,
+            BlobSasPermissions,
+            generate_blob_sas,
+        )
+
+        service = BlobServiceClient.from_connection_string(settings.azure_storage_connection_string)
+        account_key = getattr(service.credential, "account_key", None)
+        if not account_key:
+            logger.warning("Cannot generate SAS URL for %s: no shared account key available", blob_path)
+            return None
+
+        sas_token = generate_blob_sas(
+            account_name=service.account_name,
+            container_name=settings.azure_storage_container,
+            blob_name=blob_path,
+            account_key=account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=datetime.now(timezone.utc) + timedelta(days=days),
+        )
+        blob_client = service.get_container_client(
+            settings.azure_storage_container
+        ).get_blob_client(blob_path)
+        return f"{blob_client.url}?{sas_token}"
+    except Exception:
+        logger.exception("Failed to generate SAS URL for %s", blob_path)
+        return None
 
 
 def restore_workspace_from_storage() -> int:

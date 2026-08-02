@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     # Azure Communication Services (for cron job email notifications)
     azure_comm_connection_string: str = ""
     email_sender_address: str = ""
+    # How long (in days) blob-storage report links embedded in cron emails stay valid.
+    email_link_expiry_days: int = 7
 
     # Cron job API secret (shared with Azure Function timer)
     cron_secret: str = ""
