@@ -53,6 +53,21 @@ class Settings(BaseSettings):
     # Cron job API secret (shared with Azure Function timer)
     cron_secret: str = ""
 
+    # Agent run queue. Queue depth doubles as the KEDA scale signal for the
+    # Container App, so a run message must outlive the request that created it.
+    agent_queue_name: str = "agent-runs"
+    # Visibility timeout applied on dequeue and re-applied while a run is in
+    # flight. Long enough that a renewal hiccup won't redeliver mid-run.
+    agent_queue_visibility_timeout: int = 900
+    agent_queue_poll_interval: int = 5
+    # Redeliveries tolerated before a run is abandoned as poison.
+    agent_queue_max_attempts: int = 3
+    # Upper bound on how long a replica is held open for non-HTTP work
+    # (e.g. a Telegram agent run). A crashed replica can't pin the app past it.
+    activity_lease_ttl: int = 7200
+    # Run records retained in blob storage (oldest pruned first).
+    max_run_records: int = 100
+
     # Logging
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 

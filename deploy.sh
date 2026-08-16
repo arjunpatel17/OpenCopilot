@@ -21,6 +21,9 @@ CONTAINER_ENV_NAME="opencopilot-env"
 IMAGE_NAME="opencopilot"
 STORAGE_ACCOUNT_NAME="opencopilotsa$(openssl rand -hex 3)"
 STORAGE_CONTAINER="copilot-files"
+# Queue that carries agent runs. Also the KEDA scale signal that keeps a
+# replica alive for the full duration of a run (see apply-scale.sh).
+AGENT_QUEUE="agent-runs"
 # Copilot LLM model used for agent runs. Must be a model available to the
 # Copilot CLI for the GH_TOKEN account (see https://api.githubcopilot.com/models).
 # Avoid "-internal" variants — those are gated to GitHub employees only.
@@ -100,6 +103,11 @@ az storage container create \
     --connection-string "$STORAGE_CONNECTION_STRING" \
     --output none
 
+az storage queue create \
+    --name "$AGENT_QUEUE" \
+    --connection-string "$STORAGE_CONNECTION_STRING" \
+    --output none
+
 echo "    Storage: $STORAGE_ACCOUNT_NAME"
 
 # ---------- Step 5: Create Container Apps Environment ----------
@@ -151,6 +159,7 @@ az containerapp create \
         "GITHUB_PERSONAL_ACCESS_TOKEN=secretref:gh-repo-token" \
         "AZURE_STORAGE_CONNECTION_STRING=secretref:storage-conn" \
         "AZURE_STORAGE_CONTAINER=$STORAGE_CONTAINER" \
+        "AGENT_QUEUE_NAME=$AGENT_QUEUE" \
         "WORKSPACE_DIR=/workspace" \
         "AUTH_ENABLED=false" \
         "COPILOT_MODEL=$COPILOT_MODEL" \
@@ -178,25 +187,10 @@ if [[ -n "$FINNHUB_API_KEY" ]]; then
         --output none
 fi
 
-# Set a longer scale cooldown (20 min) so long-running agent tasks (e.g.
-# stocks-social-media) don't get killed by a premature scale-to-zero. The
-# previous default of 5 min was killing in-flight agent runs around the
-# 5-min mark via KEDAScaleTargetDeactivated.
-SCALE_YAML=$(mktemp)
-cat > "$SCALE_YAML" <<EOF
-properties:
-  template:
-    scale:
-      cooldownPeriod: 1200
-      minReplicas: 0
-      maxReplicas: 1
-EOF
-az containerapp update \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$CONTAINER_APP_NAME" \
-    --yaml "$SCALE_YAML" \
-    --output none
-rm -f "$SCALE_YAML"
+# Scale rules. Agent runs are driven by the queue, not by the HTTP request that
+# started them, so KEDA keeps a replica alive until the run actually finishes.
+"$(dirname "$0")/apply-scale.sh" \
+    "$RESOURCE_GROUP" "$CONTAINER_APP_NAME" "$STORAGE_ACCOUNT_NAME" "$AGENT_QUEUE"
 
 # ---------- Get the app URL ----------
 APP_URL=$(az containerapp show \

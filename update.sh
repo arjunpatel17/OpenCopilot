@@ -10,6 +10,8 @@ RESOURCE_GROUP="opencopilot-rg"
 CONTAINER_APP_NAME="opencopilot"
 IMAGE_NAME="opencopilot"
 FUNC_APP_NAME="opencopilot-cron"
+# Must match AGENT_QUEUE in deploy.sh.
+AGENT_QUEUE="agent-runs"
 # Copilot LLM model used for agent runs. Must be a model available to the
 # Copilot CLI for the GH_TOKEN account (see https://api.githubcopilot.com/models).
 # Avoid "-internal" variants — those are gated to GitHub employees only.
@@ -74,6 +76,24 @@ UPDATE_OUT=$(az containerapp update \
     fi
 }
 
+# `az containerapp secret set` / `update` intermittently report "revision with
+# suffix ... already exists" *after* successfully applying the change (an
+# internal CLI retry racing its own first attempt). Under `set -e` that cosmetic
+# error aborts the whole script — and because the scale config is applied near
+# the end, the app is left on default scale rules with no queue rule.
+az_tolerant() {
+    local out
+    if out=$(az "$@" 2>&1); then
+        return 0
+    fi
+    if grep -q "already exists" <<< "$out"; then
+        echo "    (ignoring spurious 'already exists' from az $1 $2)"
+        return 0
+    fi
+    echo "$out" >&2
+    return 1
+}
+
 # Step 2a: Refresh GH tokens from gh CLI so a re-auth on the host flows to
 # Azure on the next update — important because the Copilot LLM lives on
 # arjun-d-patel and tokens rotate. GH_REPO_TOKEN (arjunpatel17) is used for
@@ -82,7 +102,7 @@ GH_TOKEN_LATEST=$(gh auth token --user arjun-d-patel 2>/dev/null || true)
 GH_REPO_TOKEN_LATEST=$(gh auth token --user arjunpatel17 2>/dev/null || true)
 if [[ -n "$GH_TOKEN_LATEST" ]]; then
     echo "    Syncing GH_TOKEN (arjun-d-patel) for Copilot LLM..."
-    az containerapp secret set \
+    az_tolerant containerapp secret set \
         --resource-group "$RESOURCE_GROUP" \
         --name "$CONTAINER_APP_NAME" \
         --secrets "gh-token=$GH_TOKEN_LATEST" \
@@ -90,7 +110,7 @@ if [[ -n "$GH_TOKEN_LATEST" ]]; then
 fi
 if [[ -n "$GH_REPO_TOKEN_LATEST" ]]; then
     echo "    Syncing GH_REPO_TOKEN (arjunpatel17) for git ops..."
-    az containerapp secret set \
+    az_tolerant containerapp secret set \
         --resource-group "$RESOURCE_GROUP" \
         --name "$CONTAINER_APP_NAME" \
         --secrets "gh-repo-token=$GH_REPO_TOKEN_LATEST" \
@@ -105,13 +125,13 @@ if [[ -f "$ENV_FILE_FOR_KEYS" ]]; then
     FINNHUB_API_KEY=$(grep '^FINNHUB_API_KEY=' "$ENV_FILE_FOR_KEYS" | cut -d= -f2- | tr -d '[:space:]')
     if [[ -n "${FINNHUB_API_KEY:-}" ]]; then
         echo "    Syncing FINNHUB_API_KEY from backend/.env..."
-        az containerapp secret set \
+        az_tolerant containerapp secret set \
             --resource-group "$RESOURCE_GROUP" \
             --name "$CONTAINER_APP_NAME" \
             --secrets "finnhub-key=$FINNHUB_API_KEY" \
             --output none
 
-        az containerapp update \
+        az_tolerant containerapp update \
             --resource-group "$RESOURCE_GROUP" \
             --name "$CONTAINER_APP_NAME" \
             --set-env-vars "FINNHUB_API_KEY=secretref:finnhub-key" \
@@ -122,31 +142,52 @@ fi
 # Step 2b-model: Ensure COPILOT_MODEL env var matches the configured model so
 # agent runs don't fall back to an unavailable default. Keep in sync with deploy.sh.
 echo "    Syncing COPILOT_MODEL ($COPILOT_MODEL)..."
-az containerapp update \
+az_tolerant containerapp update \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_APP_NAME" \
     --set-env-vars "COPILOT_MODEL=$COPILOT_MODEL" \
     --output none
 
-# Step 2c: Re-apply scale config. `az containerapp update --image` resets
-# scale settings to defaults, which would drop cooldownPeriod back to 300s
-# and let KEDA kill in-flight agent runs at the 5-min mark. Keep this in
-# sync with the scale block in deploy.sh.
-SCALE_YAML=$(mktemp)
-cat > "$SCALE_YAML" <<EOF
-properties:
-  template:
-    scale:
-      cooldownPeriod: 1200
-      minReplicas: 0
-      maxReplicas: 1
-EOF
+# Step 2c: Ensure the agent run queue exists and re-apply scale config.
+# `az containerapp update --image` resets scale settings to defaults, and a
+# bare `cooldownPeriod` is silently dropped when no explicit scale rules are
+# defined — which is why the previous 1200s setting never took effect. The
+# queue rule is what actually keeps a replica alive for a whole agent run.
+#
+# Derive the storage account from the container app's own `storage-conn`
+# secret. The resource group holds several storage accounts (function hosts,
+# plus orphans from earlier deploys), so picking one by list order would point
+# the queue and the scale rule at an account the backend never writes to.
+STORAGE_CONNECTION_STRING=$(az containerapp secret show \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CONTAINER_APP_NAME" \
+    --secret-name storage-conn \
+    --query value -o tsv 2>/dev/null || true)
+
+STORAGE_ACCOUNT_NAME=$(sed -n 's/.*AccountName=\([^;]*\).*/\1/p' <<< "$STORAGE_CONNECTION_STRING")
+
+if [[ -z "$STORAGE_ACCOUNT_NAME" ]]; then
+    echo "ERROR: could not read the storage account from the 'storage-conn' secret."
+    echo "       Run deploy.sh first, or check: az containerapp secret list -g $RESOURCE_GROUP -n $CONTAINER_APP_NAME"
+    exit 1
+fi
+
+echo "    Storage account: $STORAGE_ACCOUNT_NAME"
+echo "    Ensuring agent run queue '$AGENT_QUEUE' exists..."
+az storage queue create \
+    --name "$AGENT_QUEUE" \
+    --connection-string "$STORAGE_CONNECTION_STRING" \
+    --output none
+
 az containerapp update \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_APP_NAME" \
-    --yaml "$SCALE_YAML" \
+    --set-env-vars "AGENT_QUEUE_NAME=$AGENT_QUEUE" \
     --output none
-rm -f "$SCALE_YAML"
+
+echo "    Applying scale configuration..."
+"$(dirname "$0")/apply-scale.sh" \
+    "$RESOURCE_GROUP" "$CONTAINER_APP_NAME" "$STORAGE_ACCOUNT_NAME" "$AGENT_QUEUE"
 
 # Get the app URL
 APP_URL=$(az containerapp show \

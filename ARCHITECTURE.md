@@ -53,6 +53,7 @@ OpenCopilot is a cloud-native application that lets users run GitHub Copilot age
 | Frontend | Vanilla HTML/CSS/JS, WebSocket streaming |
 | AI | GitHub Copilot via standalone **`copilot`** CLI (`@github/copilot` npm package) |
 | Storage | Azure Blob Storage (prod) / local filesystem (dev) |
+| Job queue | Azure Queue Storage (also the KEDA scale signal) |
 | Auth | Azure Entra ID (JWT, RS256) — optional |
 | Chat Platform | Telegram Bot API (webhook) |
 | Deployment | Docker → Azure Container Registry → Azure Container Apps |
@@ -76,6 +77,7 @@ OpenCopilot is a cloud-native application that lets users run GitHub Copilot age
 │       │   ├── skills.py        # CRUD for .skill.md files
 │       │   ├── files.py         # Upload, download, browse blob storage
 │       │   ├── logs.py          # Log snapshot + WS streaming
+│       │   ├── cron.py          # Queue a scheduled run, poll run status
 │       │   └── telegram.py      # Webhook receive/setup
 │       └── services/
 │           ├── copilot.py       # Runs Copilot CLI, streams output, manages logs
@@ -83,6 +85,10 @@ OpenCopilot is a cloud-native application that lets users run GitHub Copilot age
 │           ├── response_parser.py  # Parses CLI output into structured blocks
 │           ├── blob_storage.py     # Azure Blob / local file abstraction
 │           ├── agent_parser.py     # Reads/writes .agent.md and .skill.md
+│           ├── cron_store.py       # Scheduled job definitions (blob-backed)
+│           ├── cron_runner.py      # Executes runs off the request path
+│           ├── job_queue.py        # Azure Queue hand-off + KEDA scale signal
+│           ├── run_store.py        # Durable run records clients poll
 │           └── telegram_bot.py     # Telegram message handling + history
 ├── frontend/
 │   ├── index.html               # Two-panel dashboard (file explorer + logs)
@@ -92,6 +98,7 @@ OpenCopilot is a cloud-native application that lets users run GitHub Copilot age
 ├── Dockerfile                   # Python 3.12 + standalone copilot CLI
 ├── deploy.sh                    # Provisions Azure resources, builds & deploys
 ├── update.sh                    # Rebuilds image and restarts container
+├── apply-scale.sh               # Container App scale rules (shared by both)
 └── setup-telegram.sh            # Interactive Telegram bot setup
 ```
 
@@ -140,6 +147,39 @@ Telegram ──webhook──▶ /api/telegram/webhook ──▶ telegram_bot.py
 ```
 
 Commands like `/agent <name> <prompt>` trigger the same Copilot service. Responses are streamed by editing the Telegram message progressively. Per-chat history (in-memory, last 10 turns) provides conversation context.
+
+### Scheduled Jobs (asynchronous)
+
+Agent runs routinely take longer than any HTTP request is allowed to live, so scheduled jobs are queued rather than executed inline:
+
+```
+Azure Function timer (every 5 min)
+  │
+  ├── read cron/jobs.json from Blob Storage   (does not wake the Container App)
+  │
+  └── POST /api/cron/run/{job_id} ──▶ create run record ──▶ enqueue to `agent-runs`
+                                            │                        │
+                                      202 + run_id             KEDA sees depth ≥ 1
+                                                                     │
+                                              consumer_loop ◀────────┘
+                                                    │
+                                                    ├── run agent (minutes to hours)
+                                                    ├── renew message visibility
+                                                    ├── sync workspace → blob
+                                                    ├── email / Telegram notify
+                                                    └── delete message → scale to 0
+```
+
+Clients poll `GET /api/cron/runs/{run_id}` for status and results.
+
+Two platform limits force this design, and both are load-bearing:
+
+1. **Container Apps closes any HTTP request idle for 240 seconds.** A request that runs an agent to completion before responding is cut off long before it finishes.
+2. **The default HTTP scale rule measures concurrent requests.** Once the connection above is cut, the metric drops to zero and KEDA deactivates the last replica after the cooldown, killing the in-flight `copilot` subprocess.
+
+The queue solves both. A run message stays in `agent-runs` — invisible, with its visibility timeout continually renewed — for the entire run, so queue depth stays ≥ 1 and KEDA keeps a replica alive until the work is genuinely done. No client needs to stay connected. See [apply-scale.sh](apply-scale.sh) for the scale rules; both the HTTP rule (to wake the app) and the queue rule (to keep it alive) are required.
+
+A `cooldownPeriod` set without explicit `rules` is silently discarded by the platform, which is why the scale configuration is applied from one shared script and verified after it is written.
 
 ## Copilot CLI
 

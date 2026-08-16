@@ -11,7 +11,11 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT_SECONDS = 300  # 5 min max per command
+# How long the CLI may produce no stdout at all before we assume it is wedged.
+# A single long tool call (large build, slow web fetch) can legitimately go
+# quiet for many minutes, so this is deliberately generous.
+STDOUT_READ_TIMEOUT = 15
+MAX_IDLE_SECONDS = 3600
 
 # Read-only tools for plan mode (no edit/shell/write)
 PLAN_MODE_TOOLS = ["read", "search", "web"]
@@ -331,12 +335,12 @@ async def _run_jsonl_stream(args: list[str]) -> AsyncIterator[str]:
     try:
         buffer = ""
         no_output_cycles = 0
-        max_no_output = 60
+        max_no_output = MAX_IDLE_SECONDS // STDOUT_READ_TIMEOUT
         got_any_delta = False
 
         while True:
             try:
-                chunk = await asyncio.wait_for(process.stdout.read(4096), timeout=15)
+                chunk = await asyncio.wait_for(process.stdout.read(4096), timeout=STDOUT_READ_TIMEOUT)
             except asyncio.TimeoutError:
                 if process.returncode is not None:
                     exit_reason = "process_exited_during_idle"

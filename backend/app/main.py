@@ -75,11 +75,15 @@ async def lifespan(app: FastAPI):
     # Kick off heavy startup work in the background so the server can bind and
     # begin serving (and pass the Container Apps startup probe) immediately.
     startup_task = asyncio.create_task(_background_startup())
+    # Drains the agent run queue; also what holds the replica open during a run.
+    from app.services.cron_runner import consumer_loop
+    consumer_task = asyncio.create_task(consumer_loop())
     yield
-    # Shutdown: cancel background startup if it's still running.
-    startup_task.cancel()
-    with suppress(asyncio.CancelledError):
-        await startup_task
+    # Shutdown: cancel background tasks if they're still running.
+    for task in (startup_task, consumer_task):
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
     logger.info("OpenCopilot shutting down")
 
 

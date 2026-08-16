@@ -97,6 +97,11 @@ def cron_trigger(timer: func.TimerRequest) -> None:
 
     Reads jobs.json directly from Blob Storage so the Container App is only
     woken up when there is actual work to do (saving ~$2.50/day in idle costs).
+
+    The trigger call returns 202 as soon as the run is queued — the Container
+    App executes it in the background. This function must never wait for an
+    agent run to finish: it is hard-killed at the 10-minute functionTimeout,
+    and holding the request open would not keep the replica alive anyway.
     """
     _get_config()
 
@@ -111,19 +116,22 @@ def cron_trigger(timer: func.TimerRequest) -> None:
     logging.info("Found %d due cron jobs: %s", len(due_jobs), due_jobs)
 
     try:
-        with httpx.Client(timeout=30) as client:
-            # Execute each due job (use longer timeout — agent runs can take minutes)
+        # Generous timeout only to absorb a cold start (image pull + boot),
+        # not to wait for the agent run itself.
+        with httpx.Client(timeout=120) as client:
             for job_id in due_jobs:
                 try:
                     run_resp = client.post(
                         f"{base_url}/api/cron/run/{job_id}",
                         headers=headers,
-                        timeout=900,
                     )
                     run_resp.raise_for_status()
                     result = run_resp.json()
-                    logging.info("Job %s: %s", job_id, result.get("status"))
+                    logging.info(
+                        "Job %s queued: status=%s run_id=%s",
+                        job_id, result.get("status"), result.get("run_id"),
+                    )
                 except Exception:
-                    logging.exception("Failed to execute job %s", job_id)
+                    logging.exception("Failed to queue job %s", job_id)
     except Exception:
         logging.exception("Cron trigger failed")

@@ -20,14 +20,18 @@ def is_syncable_path(rel_path: str) -> bool:
     Single source of truth shared by ``sync_workspace_to_storage`` and any
     caller that needs to link to synced files (e.g. cron report links). Skips
     hidden directories (except ``.github``/``.copilot``), ``__pycache__``,
-    and the ``sessions/`` prefix.
+    and the ``sessions/`` and ``cron/`` prefixes.
+
+    ``cron/`` holds job and run state that is written straight to blob storage.
+    Syncing it from the workspace would let a stale local copy overwrite live
+    state.
     """
     parts = Path(rel_path).parts
     if not parts:
         return False
     if any((p.startswith(".") and p not in (".github", ".copilot")) or p == "__pycache__" for p in parts):
         return False
-    if parts[0] == "sessions":
+    if parts[0] in ("sessions", "cron"):
         return False
     return True
 
@@ -380,8 +384,8 @@ def restore_workspace_from_storage() -> int:
     for blob in container.list_blobs():
         name = blob.name
         parts = name.split("/")
-        # Skip sessions and __pycache__
-        if parts[0] == "sessions" or "__pycache__" in parts:
+        # Skip sessions, cron state (read directly from blob), and __pycache__
+        if parts[0] in ("sessions", "cron") or "__pycache__" in parts:
             continue
         local_path = workspace / name
         # Don't overwrite deploy-managed files that already exist from the image

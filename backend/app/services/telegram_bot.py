@@ -787,6 +787,11 @@ async def _handle_telegram_message_locked(update_data: dict, chat_id: int) -> No
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(_send_typing_loop(bot, chat_id, stop_typing))
 
+    # This runs in a background task, so no open HTTP request keeps the replica
+    # alive. Without a lease, KEDA scales to zero and kills the run mid-stream.
+    from app.services import replica_lease
+    lease = await replica_lease.acquire(f"telegram:{chat_id}")
+
     # Ensure workspace directories exist
     copilot.ensure_workspace_dirs()
 
@@ -919,6 +924,7 @@ async def _handle_telegram_message_locked(update_data: dict, chat_id: int) -> No
     finally:
         stop_typing.set()
         typing_task.cancel()
+        await replica_lease.release(lease)
 
     # Sync any files created by copilot to blob storage
     from app.services import blob_storage
