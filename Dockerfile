@@ -52,6 +52,7 @@ RUN if [ -f /workspace/tools/news-scanner/requirements.txt ]; then pip install -
 RUN if [ -f /workspace/tools/sleeper-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/sleeper-scanner/requirements.txt; fi
 RUN if [ -f /workspace/tools/earnings-calendar-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/earnings-calendar-scanner/requirements.txt; fi
 RUN if [ -f /workspace/tools/card-generator/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/card-generator/requirements.txt; fi
+RUN if [ -f /workspace/tools/youtube-ranking-scanner/requirements.txt ]; then pip install --no-cache-dir -r /workspace/tools/youtube-ranking-scanner/requirements.txt; fi
 
 # The card-generator tool renders Jinja2 templates to PNG via headless Chromium.
 # Install Chromium + its system libraries (libglib2.0-0, libnss3, libdbus-1-3,
