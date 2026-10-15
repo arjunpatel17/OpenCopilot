@@ -15,7 +15,8 @@ AGENT_QUEUE="agent-runs"
 # Copilot LLM model used for agent runs. Must be a model available to the
 # Copilot CLI for the GH_TOKEN account (see https://api.githubcopilot.com/models).
 # Avoid "-internal" variants — those are gated to GitHub employees only.
-COPILOT_MODEL="claude-opus-4.8-1m"
+COPILOT_MODEL="claude-opus-5.5-1m"
+COPILOT_REASONING_EFFORT="high"
 
 # Auto-detect ACR name from the running container app
 echo ">>> Detecting current deployment..."
@@ -139,13 +140,14 @@ if [[ -f "$ENV_FILE_FOR_KEYS" ]]; then
     fi
 fi
 
-# Step 2b-model: Ensure COPILOT_MODEL env var matches the configured model so
-# agent runs don't fall back to an unavailable default. Keep in sync with deploy.sh.
-echo "    Syncing COPILOT_MODEL ($COPILOT_MODEL)..."
+# Step 2b-model: Keep model and reasoning defaults in sync with deploy.sh.
+echo "    Syncing Copilot defaults ($COPILOT_MODEL, $COPILOT_REASONING_EFFORT effort)..."
 az_tolerant containerapp update \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_APP_NAME" \
-    --set-env-vars "COPILOT_MODEL=$COPILOT_MODEL" \
+    --set-env-vars \
+        "COPILOT_MODEL=$COPILOT_MODEL" \
+        "COPILOT_REASONING_EFFORT=$COPILOT_REASONING_EFFORT" \
     --output none
 
 # Step 2c: Ensure the agent run queue exists and re-apply scale config.

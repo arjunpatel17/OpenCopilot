@@ -20,18 +20,24 @@ def is_syncable_path(rel_path: str) -> bool:
     Single source of truth shared by ``sync_workspace_to_storage`` and any
     caller that needs to link to synced files (e.g. cron report links). Skips
     hidden directories (except ``.github``/``.copilot``), ``__pycache__``,
-    and the ``sessions/`` and ``cron/`` prefixes.
+    ``node_modules``, ``dist`` build folders inside ``tools/``, and the
+    ``sessions/`` and ``cron/`` prefixes.
 
     ``cron/`` holds job and run state that is written straight to blob storage.
     Syncing it from the workspace would let a stale local copy overwrite live
     state.
+
+    Tool dependencies and builds are reinstalled or regenerated on demand;
+    agents publish their results under ``output/`` or ``reports/``.
     """
     parts = Path(rel_path).parts
     if not parts:
         return False
-    if any((p.startswith(".") and p not in (".github", ".copilot")) or p == "__pycache__" for p in parts):
+    if any((p.startswith(".") and p not in (".github", ".copilot")) or p in ("__pycache__", "node_modules") for p in parts):
         return False
     if parts[0] in ("sessions", "cron"):
+        return False
+    if parts[0] == "tools" and "dist" in parts[1:-1]:
         return False
     return True
 

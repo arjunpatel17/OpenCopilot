@@ -1043,6 +1043,7 @@ async def _send_email_report(
 
 def _snapshot_workspace_files() -> set[str]:
     """Return a set of relative file paths currently in the workspace."""
+    from app.services import blob_storage
     workspace = Path(settings.workspace_dir)
     if not workspace.exists():
         return set()
@@ -1055,6 +1056,8 @@ def _snapshot_workspace_files() -> set[str]:
         if any((p.startswith(".") and p != ".github") or p == "__pycache__" for p in parts):
             continue
         if parts[0] == "sessions":
+            continue
+        if not blob_storage.is_syncable_path(str(rel)):
             continue
         files.add(str(rel))
     return files

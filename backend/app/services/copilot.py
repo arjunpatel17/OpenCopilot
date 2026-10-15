@@ -210,6 +210,12 @@ def _resolve_model_args(model: str | None) -> list[str]:
     return ["--model", model]
 
 
+def _resolve_reasoning_args() -> list[str]:
+    """Set effort explicitly so persisted CLI preferences cannot change the default."""
+    effort = settings.copilot_reasoning_effort
+    return ["--reasoning-effort", effort] if effort else []
+
+
 async def run_code_chat(prompt: str, agent_name: str | None = None, *, model_name: str | None = None, history: str | None = None) -> AsyncIterator[str]:
     """Run a prompt via the standalone `copilot` CLI with structured JSONL output."""
     # Ensure data files are fresh from blob storage before the agent reads them
@@ -241,14 +247,15 @@ async def run_code_chat(prompt: str, agent_name: str | None = None, *, model_nam
     if agent_name:
         args.extend(["--agent", agent_name])
     args.extend(_resolve_model_args(model))
+    args.extend(_resolve_reasoning_args())
     args.extend(["-p", prompt])
 
     # Truncate prompt for display
     display_prompt = prompt[:120] + ("..." if len(prompt) > 120 else "")
     proc_id = f"code-{id(args)}-{time.time()}"
-    _active_processes[proc_id] = {"prompt": display_prompt, "model": model, "started": time.time(), "status": "running"}
-    _emit_log({"type": "process_start", "prompt": display_prompt, "model": model})
-    logger.info("Copilot process starting", extra={"agent_name": agent_name, "model": model})
+    _active_processes[proc_id] = {"prompt": display_prompt, "model": model, "reasoning_effort": settings.copilot_reasoning_effort, "started": time.time(), "status": "running"}
+    _emit_log({"type": "process_start", "prompt": display_prompt, "model": model, "reasoning_effort": settings.copilot_reasoning_effort})
+    logger.info("Copilot process starting", extra={"agent_name": agent_name, "model": model, "reasoning_effort": settings.copilot_reasoning_effort})
 
     try:
         async for chunk in _run_jsonl_stream(args):
@@ -288,14 +295,15 @@ async def run_plan_mode(prompt: str, agent_name: str | None = None, *, model_nam
     if agent_name:
         args.extend(["--agent", agent_name])
     args.extend(_resolve_model_args(model))
+    args.extend(_resolve_reasoning_args())
     args.extend(["-p", combined])
 
     # Track process for logs
     display_prompt = prompt[:120] + ("..." if len(prompt) > 120 else "")
     proc_id = f"plan-{id(args)}-{time.time()}"
-    _active_processes[proc_id] = {"prompt": display_prompt, "model": model, "started": time.time(), "status": "running"}
-    _emit_log({"type": "process_start", "prompt": display_prompt, "model": model})
-    logger.info("Copilot plan process starting", extra={"agent_name": agent_name, "model": model})
+    _active_processes[proc_id] = {"prompt": display_prompt, "model": model, "reasoning_effort": settings.copilot_reasoning_effort, "started": time.time(), "status": "running"}
+    _emit_log({"type": "process_start", "prompt": display_prompt, "model": model, "reasoning_effort": settings.copilot_reasoning_effort})
+    logger.info("Copilot plan process starting", extra={"agent_name": agent_name, "model": model, "reasoning_effort": settings.copilot_reasoning_effort})
 
     try:
         async for chunk in _run_jsonl_stream(args):

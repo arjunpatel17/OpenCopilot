@@ -5,8 +5,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     gnupg \
-    npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Node.js 22 (official build) for npm-installed CLIs and Node-based workspace
+# tools; the children's book engine in tools/childrens-books requires Node 22+.
+COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-bookworm-slim /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && node --version && npm --version
 
 # Install GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -69,6 +76,18 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 RUN if [ -f /workspace/tools/card-generator/requirements.txt ]; then \
         mkdir -p /opt/playwright && \
         playwright install --with-deps chromium && \
+        chmod -R a+rX /opt/playwright ; \
+    fi
+
+# The children's book engine (storybook-creator agent) needs its locked npm
+# packages and the Chromium build its own Playwright version expects.
+# --ignore-scripts skips ffmpeg-static's download: narrated video export needs
+# macOS voices, so it never runs in this container.
+RUN if [ -f /workspace/tools/childrens-books/package-lock.json ]; then \
+        cd /workspace/tools/childrens-books && \
+        npm ci --ignore-scripts --no-audit --no-fund && \
+        mkdir -p /opt/playwright && \
+        npx playwright install --with-deps chromium && \
         chmod -R a+rX /opt/playwright ; \
     fi
 

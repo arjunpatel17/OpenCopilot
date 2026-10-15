@@ -53,7 +53,7 @@ class FallbackModelsTests(unittest.TestCase):
         self.assertFalse(retired.intersection(model_ids(copilot._DEFAULT_MODELS)))
 
     def test_current_default_is_preserved(self):
-        self.assertIn("claude-opus-4.8-1m", model_ids(copilot._DEFAULT_MODELS))
+        self.assertIn("claude-opus-5.5-1m", model_ids(copilot._DEFAULT_MODELS))
 
     def test_long_context_aliases_use_real_cli_model_ids(self):
         for model_id in model_ids(copilot._DEFAULT_MODELS):

@@ -68,6 +68,7 @@ async def lifespan(app: FastAPI):
             "auth_enabled": settings.auth_enabled,
             "cors_origins": settings.cors_origins,
             "model": settings.copilot_model,
+            "reasoning_effort": settings.copilot_reasoning_effort,
             "telegram_configured": bool(settings.telegram_bot_token),
             "blob_storage_configured": bool(settings.azure_storage_connection_string),
         },

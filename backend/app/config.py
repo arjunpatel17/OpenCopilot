@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from typing import Optional
+from typing import Literal
 
 
 class Settings(BaseSettings):
@@ -21,7 +21,9 @@ class Settings(BaseSettings):
     cors_origins: list[str] = []
 
     # Copilot model (empty string = use CLI default)
-    copilot_model: str = "claude-opus-4.8-1m"
+    copilot_model: str = "claude-opus-5.5-1m"
+    # Empty effort leaves the CLI's own setting untouched.
+    copilot_reasoning_effort: Literal["", "none", "minimal", "low", "medium", "high", "xhigh", "max"] = "high"
 
     # Auth toggle (disable for local dev)
     auth_enabled: bool = False

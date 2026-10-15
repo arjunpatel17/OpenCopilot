@@ -9,4 +9,5 @@ venv/
 backend/.venv/
 backend/.env
 workspace/.storage/
-node_modules/
+**/node_modules/
+workspace/tools/childrens-books/dist/

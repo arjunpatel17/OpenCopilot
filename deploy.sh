@@ -27,7 +27,8 @@ AGENT_QUEUE="agent-runs"
 # Copilot LLM model used for agent runs. Must be a model available to the
 # Copilot CLI for the GH_TOKEN account (see https://api.githubcopilot.com/models).
 # Avoid "-internal" variants — those are gated to GitHub employees only.
-COPILOT_MODEL="claude-opus-4.8-1m"
+COPILOT_MODEL="claude-opus-5.5-1m"
+COPILOT_REASONING_EFFORT="high"
 
 # GitHub tokens for the container:
 #   GH_TOKEN      — arjun-d-patel (Copilot LLM access)
@@ -163,6 +164,7 @@ az containerapp create \
         "WORKSPACE_DIR=/workspace" \
         "AUTH_ENABLED=false" \
         "COPILOT_MODEL=$COPILOT_MODEL" \
+        "COPILOT_REASONING_EFFORT=$COPILOT_REASONING_EFFORT" \
     --secrets \
         "gh-token=$GH_TOKEN" \
         "gh-repo-token=$GH_REPO_TOKEN" \

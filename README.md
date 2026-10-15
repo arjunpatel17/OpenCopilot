@@ -73,6 +73,20 @@ cp /path/to/GithubAgents/skills/*.skill.md workspace/.github/skills/
 
 Or create agents via the web UI after deployment.
 
+### Children's storybooks
+
+The `storybook-creator` agent and `children-storybook` skill use the Little Story Library engine, copied from the ChildrensBooks repository into `workspace/tools/childrens-books/` together with its existing books. Every finished book is collected in **`workspace/output/childrens-books/<slug>/`**: the reading PDF, offline HTML reader, page overview, manuscript and research notes, plus `print/` when printer files are requested.
+
+```
+/agent storybook-creator A gentle Ramayan story about Shabari for ages 1–2
+/storybook-creator Make printer files for where-is-ghanshyam
+```
+
+- **Local:** install Node.js 22 or newer, then run `npm ci` once in `workspace/tools/childrens-books`.
+- **Azure:** `./update.sh` rebuilds the image with Node.js 22, the engine's packages and Chromium. Narrated video needs macOS voices, so the container cannot export video.
+- **Refresh the engine** after committing changes in ChildrensBooks. This overwrites engine files and same-named books but keeps books created here:
+  `git -C ../ChildrensBooks archive HEAD | tar -x -C workspace/tools/childrens-books`
+
 ---
 
 ## Step 4: Local Development (Optional)
@@ -211,7 +225,15 @@ the cache on access after five minutes. Failed requests retain the last successf
 catalog and retry after one minute; before discovery, a current public fallback
 list is used. Model discovery does not run an AI prompt or consume an LLM turn.
 
-The default remains `claude-opus-4.8-1m`. The `-1m` choices for supported Claude
+The default is **Claude Opus 5.5, 1M context, High reasoning**
+(`COPILOT_MODEL=claude-opus-5.5-1m`, `COPILOT_REASONING_EFFORT=high`).
+Both code/agent runs and read-only plan mode pass `--reasoning-effort high`
+explicitly, rather than inheriting a saved CLI preference. Override
+`COPILOT_REASONING_EFFORT` to change it, or set it to an empty string to leave
+the CLI's effort setting untouched. Per-request model overrides still win over
+`COPILOT_MODEL`; the configured reasoning effort applies to both modes.
+
+The `-1m` choices for supported Claude
 models map to the base model ID plus the CLI's `--context long_context` option;
 they are not separate model IDs. Other providers use their native context limits.
 Availability still depends on the Copilot account's plan and model policies.

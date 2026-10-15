@@ -39,7 +39,7 @@ class JSONFormatter(logging.Formatter):
             log_entry["request_id"] = req_id
 
         # Add extra fields passed via logger.info("msg", extra={...})
-        for key in ("chat_id", "agent_name", "model", "session_id",
+        for key in ("chat_id", "agent_name", "model", "reasoning_effort", "session_id",
                      "duration_ms", "status_code", "method", "path",
                      "user", "error_type",
                      # Copilot subprocess stream diagnostics
