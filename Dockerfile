@@ -17,8 +17,10 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install GitHub Copilot CLI (standalone) and MCP servers
-RUN npm install -g @github/copilot paper-search-mcp-nodejs
+# Pin the current Copilot CLI so model updates cannot reuse a stale `latest`
+# install layer. The version can also be overridden with an ACR build argument.
+ARG COPILOT_CLI_VERSION=1.0.95
+RUN npm install -g "@github/copilot@${COPILOT_CLI_VERSION}" paper-search-mcp-nodejs
 
 # Create workspace directory
 RUN mkdir -p /workspace/.github/agents /workspace/.github/skills /workspace/.copilot /workspace/reports

@@ -7,6 +7,9 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import AsyncIterator
+
+import httpx
+
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -187,7 +190,7 @@ def _prepend_history(prompt: str, history: str | None) -> str:
 # Suffix used by the UI to request a model's 1M ("long") context window. The
 # Copilot CLI exposes the larger window via `--context long_context` rather than
 # a distinct model id, so we strip this suffix and pass the flag instead. Works
-# for any base model that supports the long-context tier (e.g. Opus 4.7 / 4.8).
+# for any base model that supports the long-context tier (e.g. Opus 4.8 / 5.5).
 _LONG_CONTEXT_SUFFIX = "-1m"
 _LONG_CONTEXT_TIER = "long_context"
 
@@ -546,107 +549,175 @@ def get_mcp_servers() -> list[dict]:
 
 # ========== Model discovery ==========
 
-# Default fallback models if CLI discovery fails
+# Public fallback catalog verified against the Copilot model API and supported
+# model documentation on 2026-10-10. Account policies may narrow this list.
+# https://docs.github.com/en/copilot/reference/ai-models/supported-models
 _DEFAULT_MODELS = [
     {"group": "Claude", "models": [
+        {"id": "claude-opus-5.5", "name": "Claude Opus 5.5"},
+        {"id": "claude-opus-5.5-1m", "name": "Claude Opus 5.5 (1M context)"},
+        {"id": "claude-opus-5", "name": "Claude Opus 5"},
+        {"id": "claude-opus-5-1m", "name": "Claude Opus 5 (1M context)"},
         {"id": "claude-opus-4.8", "name": "Claude Opus 4.8"},
         {"id": "claude-opus-4.8-1m", "name": "Claude Opus 4.8 (1M context)"},
-        {"id": "claude-opus-4.7", "name": "Claude Opus 4.7"},
-        {"id": "claude-opus-4.7-1m", "name": "Claude Opus 4.7 (1M context)"},
-        {"id": "claude-opus-4.6", "name": "Claude Opus 4.6"},
-        {"id": "claude-opus-4.5", "name": "Claude Opus 4.5"},
-        {"id": "claude-sonnet-4.6", "name": "Claude Sonnet 4.6"},
-        {"id": "claude-sonnet-4.5", "name": "Claude Sonnet 4.5"},
-        {"id": "claude-sonnet-4", "name": "Claude Sonnet 4"},
+        {"id": "claude-sonnet-5.5", "name": "Claude Sonnet 5.5"},
+        {"id": "claude-sonnet-5.5-1m", "name": "Claude Sonnet 5.5 (1M context)"},
+        {"id": "claude-sonnet-5", "name": "Claude Sonnet 5"},
+        {"id": "claude-sonnet-5-1m", "name": "Claude Sonnet 5 (1M context)"},
+        {"id": "claude-haiku-5.5", "name": "Claude Haiku 5.5"},
+        {"id": "claude-haiku-5.5-1m", "name": "Claude Haiku 5.5 (1M context)"},
         {"id": "claude-haiku-4.5", "name": "Claude Haiku 4.5"},
     ]},
     {"group": "GPT", "models": [
+        {"id": "gpt-6.1-sol", "name": "GPT-6.1 Sol"},
+        {"id": "gpt-6-astra", "name": "GPT-6 Astra"},
+        {"id": "gpt-6-sol", "name": "GPT-6 Sol"},
+        {"id": "gpt-6-luna", "name": "GPT-6 Luna"},
+        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol"},
+        {"id": "gpt-5.6-terra", "name": "GPT-5.6 Terra"},
+        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna"},
         {"id": "gpt-5.5", "name": "GPT-5.5"},
         {"id": "gpt-5.4", "name": "GPT-5.4"},
-        {"id": "gpt-5.3-codex", "name": "GPT-5.3-Codex"},
-        {"id": "gpt-5.2-codex", "name": "GPT-5.2-Codex"},
-        {"id": "gpt-5.2", "name": "GPT-5.2"},
-        {"id": "gpt-5.1-codex-max", "name": "GPT-5.1-Codex-Max"},
-        {"id": "gpt-5.1-codex", "name": "GPT-5.1-Codex"},
-        {"id": "gpt-5.1", "name": "GPT-5.1"},
         {"id": "gpt-5.4-mini", "name": "GPT-5.4 mini"},
-        {"id": "gpt-5.1-codex-mini", "name": "GPT-5.1-Codex-Mini"},
+        {"id": "gpt-5.3-codex", "name": "GPT-5.3-Codex"},
         {"id": "gpt-5-mini", "name": "GPT-5 mini"},
-        {"id": "gpt-4.1", "name": "GPT-4.1"},
     ]},
     {"group": "Gemini", "models": [
-        {"id": "gemini-3-pro-preview", "name": "Gemini 3 Pro (Preview)"},
+        {"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"},
+        {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash"},
     ]},
     {"group": "Microsoft", "models": [
-        {"id": "mai-code-1-flash", "name": "MAI-Code-1-Flash"},
+        {"id": "mai-code-1.1-flash", "name": "MAI-Code-1.1-Flash"},
+    ]},
+    {"group": "Grok", "models": [
+        {"id": "grok-4.7", "name": "Grok 4.7"},
+        {"id": "grok-4.6", "name": "Grok 4.6"},
+        {"id": "grok-4.5", "name": "Grok 4.5"},
     ]},
 ]
 
-# Cached model list — populated at startup
+# Explicitly supported CLI tier aliases, not an inference from native context
+# size. GPT/Gemini models with large native windows do not need a tier flag.
+_LONG_CONTEXT_ALIASES = {
+    model["id"][:-len(_LONG_CONTEXT_SUFFIX)]: model
+    for group in _DEFAULT_MODELS
+    for model in group["models"]
+    if model["id"].endswith(_LONG_CONTEXT_SUFFIX)
+}
+
+_MODEL_CATALOG_URL = "https://api.githubcopilot.com/models"
+_MODEL_CACHE_TTL_SECONDS = 300
+_MODEL_RETRY_SECONDS = 60
+
+# Cached model list — populated at startup and refreshed by API/Telegram reads.
 _cached_models: list[dict] | None = None
+_model_cache_expires_at = 0.0
+_model_discovery_lock = asyncio.Lock()
 
 
 def get_models() -> list[dict]:
-    """Return the cached model list (grouped)."""
-    return _cached_models or _DEFAULT_MODELS
+    """Return the last catalog, or the public fallback before discovery."""
+    # An authenticated empty catalog is authoritative, not a discovery failure.
+    return _cached_models if _cached_models is not None else _DEFAULT_MODELS
+
+
+def _group_catalog_models(models: list) -> list[dict]:
+    """Keep user-selectable, policy-enabled agent models and group providers."""
+    groups: dict[str, list[dict]] = {}
+    seen: set[str] = set()
+    providers = (
+        ("claude-", "Claude"), ("gpt-", "GPT"), ("gemini-", "Gemini"),
+        ("mai-", "Microsoft"), ("grok-", "Grok"), ("kimi-", "Kimi"),
+    )
+    for model in models:
+        if not isinstance(model, dict) or model.get("model_picker_enabled") is not True:
+            continue
+        model_id = model.get("id")
+        if not isinstance(model_id, str) or not model_id.strip():
+            continue
+        model_id = model_id.strip()
+        name = model.get("name")
+        if not isinstance(name, str) or not name.strip():
+            name = model_id
+        # Some internal-only entries are still marked picker/policy enabled.
+        if "internal" in f"{model_id} {name}".lower() or model_id in seen:
+            continue
+        policy = model.get("policy") or {}
+        capabilities = model.get("capabilities") or {}
+        if not isinstance(policy, dict) or policy.get("state", "enabled") != "enabled":
+            continue
+        if not isinstance(capabilities, dict) or capabilities.get("type") != "chat":
+            continue
+        supports = capabilities.get("supports") or {}
+        if not isinstance(supports, dict) or supports.get("tool_calls") is not True:
+            continue
+
+        group = next((group for prefix, group in providers if model_id.startswith(prefix)), "Other")
+        if group == "Other" and len(model_id) > 1 and model_id[0] == "o" and model_id[1].isdigit():
+            group = "OpenAI Reasoning"
+        groups.setdefault(group, []).append({"id": model_id, "name": name})
+        seen.add(model_id)
+
+        alias = _LONG_CONTEXT_ALIASES.get(model_id)
+        limits = capabilities.get("limits") or {}
+        context_size = limits.get("max_context_window_tokens", 0) if isinstance(limits, dict) else 0
+        if alias and isinstance(context_size, (int, float)) and context_size >= 1000000 and alias["id"] not in seen:
+            groups[group].append(dict(alias))
+            seen.add(alias["id"])
+
+    return [{"group": group, "models": models} for group, models in groups.items()]
 
 
 async def discover_models() -> list[dict]:
-    """Query copilot CLI for available models and cache the result."""
-    global _cached_models
+    """Refresh the authenticated model catalog without spending an LLM turn."""
+    global _cached_models, _model_cache_expires_at
 
-    copilot_path = _find_cli("copilot")
-    if not copilot_path:
-        logger.warning("'copilot' CLI not found, using default model list")
-        _cached_models = _DEFAULT_MODELS
-        return _cached_models
+    if time.monotonic() < _model_cache_expires_at:
+        return get_models()
 
-    # Ask copilot to list models via a quick prompt
-    try:
-        raw_output = []
-        async for chunk in run_code_chat(
-            "List every available model ID. Output ONLY a JSON array of objects "
-            "with 'id' and 'name' fields, no markdown, no explanation. Example: "
-            '[{"id":"claude-sonnet-4.6","name":"Claude Sonnet 4.6"}]'
-        ):
-            if not chunk.strip().startswith(TOOL_EVENT_PREFIX):
-                raw_output.append(chunk)
+    async with _model_discovery_lock:
+        # Concurrent startup/API/Telegram requests share one catalog fetch.
+        if time.monotonic() < _model_cache_expires_at:
+            return get_models()
 
-        text = "".join(raw_output).strip()
-        # Extract JSON array from response
-        start = text.find("[")
-        end = text.rfind("]")
-        if start != -1 and end != -1:
-            models_list = json.loads(text[start:end + 1])
-            if isinstance(models_list, list) and len(models_list) > 3:
-                # Group by provider prefix
-                groups: dict[str, list[dict]] = {}
-                for m in models_list:
-                    mid = m.get("id", "")
-                    mname = m.get("name", mid)
-                    if mid.startswith("claude"):
-                        group = "Claude"
-                    elif mid.startswith("gpt"):
-                        group = "GPT"
-                    elif mid.startswith("gemini"):
-                        group = "Gemini"
-                    elif mid.startswith("mai"):
-                        group = "Microsoft"
-                    elif mid.startswith("o"):
-                        group = "OpenAI Reasoning"
-                    else:
-                        group = "Other"
-                    groups.setdefault(group, []).append({"id": mid, "name": mname})
+        # Match the Copilot CLI's token precedence. Deployment supplies GH_TOKEN
+        # for the Copilot account, not GH_REPO_TOKEN used by git operations.
+        token = (
+            os.environ.get("COPILOT_GITHUB_TOKEN")
+            or os.environ.get("GH_TOKEN")
+            or os.environ.get("GITHUB_TOKEN")
+            or ""
+        ).strip()
+        if not token:
+            logger.warning("Copilot token unavailable, using cached/fallback model list")
+            _model_cache_expires_at = time.monotonic() + _MODEL_RETRY_SECONDS
+            return get_models()
 
-                _cached_models = [{"group": g, "models": ms} for g, ms in groups.items()]
-                logger.info("Discovered %d models from CLI", len(models_list))
-                return _cached_models
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0)) as client:
+                response = await client.get(
+                    _MODEL_CATALOG_URL,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/json",
+                        "Copilot-Integration-Id": "copilot-cli",
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                raise ValueError("Invalid Copilot model catalog")
 
-    except Exception:
-        logger.exception("Model discovery from CLI failed, using defaults")
+            _cached_models = _group_catalog_models(payload["data"])
+            _model_cache_expires_at = time.monotonic() + _MODEL_CACHE_TTL_SECONDS
+            logger.info("Discovered %d model choices from Copilot catalog", sum(len(group["models"]) for group in _cached_models))
+        except Exception as exc:
+            # Keep the last successful catalog during outages. Do not log
+            # request headers, credentials, or potentially sensitive bodies.
+            logger.warning("Copilot model discovery failed (%s), using cached/fallback list", type(exc).__name__)
+            _model_cache_expires_at = time.monotonic() + _MODEL_RETRY_SECONDS
 
-    _cached_models = _DEFAULT_MODELS
-    return _cached_models
+        return get_models()
 
 
 async def run_copilot_sync(prompt: str, agent_name: str | None = None, *, model_name: str | None = None) -> str:

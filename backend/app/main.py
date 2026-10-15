@@ -49,7 +49,7 @@ async def _background_startup() -> None:
     except Exception:
         logger.exception("Failed to restore workspace from blob storage")
 
-    # Discover available models from the Copilot CLI (runs an LLM query).
+    # Discover models from the authenticated Copilot catalog (no LLM query).
     try:
         from app.services.copilot import discover_models
         models = await discover_models()
@@ -165,8 +165,8 @@ async def health():
 
 @app.get("/api/models")
 async def list_models():
-    from app.services.copilot import get_models
-    return get_models()
+    from app.services.copilot import discover_models
+    return await discover_models()
 
 app.include_router(agents.router)
 app.include_router(skills.router)

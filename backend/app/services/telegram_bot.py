@@ -279,8 +279,8 @@ HELP_TEXT = (
     "• /explain What does asyncio\\.gather do?\n\n"
     "*Model selection:*\n"
     "Add `\\-\\-model <id>` to any message:\n"
-    "• \\-\\-model claude\\-opus\\-4\\.6\\-1m explain quantum computing\n"
-    "• /agent stock\\-analysis \\-\\-model gpt\\-5\\.4 AAPL"
+    "• \\-\\-model claude\\-opus\\-5\\.5\\-1m explain quantum computing\n"
+    "• /agent stock\\-analysis \\-\\-model gpt\\-6\\.1\\-sol AAPL"
 )
 
 
@@ -402,15 +402,16 @@ async def _handle_cmd_version(bot: Bot, chat_id: int) -> None:
 
 
 async def _handle_cmd_models(bot: Bot, chat_id: int) -> None:
-    model_groups = copilot.get_models()
+    model_groups = await copilot.discover_models()
     lines = ["🧠 *Available Models:*\n"]
     for group in model_groups:
         lines.append(f"*{group['group']}:*")
         for m in group["models"]:
-            lines.append(f"  • `{m['id']}` — {m['name']}")
+            lines.append(f"  • `{m['id']}` — {_escape_md(m['name'])}")
         lines.append("")
     lines.append("Use with: /agent <name> --model <id> <prompt>")
-    await bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="Markdown")
+    for chunk in _split_message("\n".join(lines)):
+        await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
 
 
 async def _handle_cmd_sync(bot: Bot, chat_id: int) -> None:

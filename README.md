@@ -200,9 +200,21 @@ When an agent name is provided after `/plan`, it uses that agent's instructions 
 Add `--model <id>` to any message to use a specific model:
 
 ```
---model claude-opus-4.6-1m explain quantum computing
-/agent stock-analysis --model gpt-5.4 AAPL
+--model claude-opus-5.5-1m explain quantum computing
+/agent stock-analysis --model gpt-6.1-sol AAPL
 ```
+
+Use `/models` in Telegram or `GET /api/models` for the current account's model
+choices. OpenCopilot reads the authenticated Copilot model catalog, excludes
+hidden, policy-disabled, internal-only, and non-tool-capable models, and refreshes
+the cache on access after five minutes. Failed requests retain the last successful
+catalog and retry after one minute; before discovery, a current public fallback
+list is used. Model discovery does not run an AI prompt or consume an LLM turn.
+
+The default remains `claude-opus-4.8-1m`. The `-1m` choices for supported Claude
+models map to the base model ID plus the CLI's `--context long_context` option;
+they are not separate model IDs. Other providers use their native context limits.
+Availability still depends on the Copilot account's plan and model policies.
 
 ### Introspection commands
 
